@@ -9,12 +9,9 @@ Key Functionalities:
     - The file is downloaded to the local environment for processing.
 
 2. **PDF Processing**:
-    - **Auto-Tagging for Accessibility**: Using Adobe PDF Services, the script automatically tags the PDF for accessibility,
-      generating a compliant version with an optional report on tagging.
-    - **Text and Table Extraction**: Text, tables, figures, and renditions are extracted from the PDF using Adobe PDF Services
-      and saved as structured data.
-    - **Table of Contents (TOC)**: A Table of Contents (TOC) is generated based on the headings in the extracted content and 
-      added to the PDF.
+    - **Auto-Tagging for Accessibility**: Using Adobe PDF Services Autotag only (the tagged PDF).
+    - **Local text/figure extract**: PyMuPDF builds TOC and image context (replaces Adobe Extract).
+    - **Table of Contents (TOC)**: Generated from heading-sized text after Autotag.
     - **Custom Metadata**: XML metadata (such as title and dominant language) is injected into the PDF, improving its 
       accessibility and organization.
 
@@ -42,8 +39,7 @@ Libraries and Services:
 - **Boto3**: AWS SDK for Python to interact with S3.
 - **PyMuPDF**: For editing and updating PDF files, including adding TOC and custom metadata.
 - **OpenPyXL**: For extracting images from Excel files.
-- **Adobe PDF Services**: Handles advanced PDF operations like autotagging for accessibility, extracting structured data 
-  (tables, text, and figures), and generating reports.
+- **Adobe PDF Services**: Autotag only (tagged PDF + Autotag Excel report). Extract API is not used.
 - **AWS Comprehend**: For detecting the dominant language in extracted text.
 
 Environment Variables Required:
@@ -77,11 +73,6 @@ from adobe.pdfservices.operation.pdf_services_media_type import PDFServicesMedia
 from adobe.pdfservices.operation.io.cloud_asset import CloudAsset
 from adobe.pdfservices.operation.io.stream_asset import StreamAsset
 from adobe.pdfservices.operation.pdf_services import PDFServices, ClientConfig
-from adobe.pdfservices.operation.pdfjobs.jobs.extract_pdf_job import ExtractPDFJob
-from adobe.pdfservices.operation.pdfjobs.params.extract_pdf.extract_element_type import ExtractElementType
-from adobe.pdfservices.operation.pdfjobs.params.extract_pdf.extract_pdf_params import ExtractPDFParams
-from adobe.pdfservices.operation.pdfjobs.params.extract_pdf.extract_renditions_element_type import ExtractRenditionsElementType
-from adobe.pdfservices.operation.pdfjobs.result.extract_pdf_result import ExtractPDFResult
 from adobe.pdfservices.operation.pdfjobs.jobs.autotag_pdf_job import AutotagPDFJob
 from adobe.pdfservices.operation.pdfjobs.params.autotag_pdf.autotag_pdf_params import AutotagPDFParams
 from adobe.pdfservices.operation.pdfjobs.result.autotag_pdf_result import AutotagPDFResult
@@ -90,6 +81,36 @@ logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
 s3 = boto3.client('s3')
+CLOUDWATCH_NAMESPACE = "PDFAccessibility"
+
+
+def emit_stats(filename, **counts):
+    """Log STATS JSON and publish CloudWatch metrics (best-effort)."""
+    payload = {"filename": filename, **counts}
+    logging.info("STATS %s", json.dumps(payload))
+    try:
+        cw = boto3.client("cloudwatch")
+        mapping = (
+            ("adobe_calls", "AdobeApiCalls"),
+            ("adobe_autotag", "AdobeAutotagJobs"),
+            ("adobe_extract", "AdobeExtractJobs"),
+            ("adobe_precheck", "AdobePrecheckJobs"),
+            ("images_extracted", "ImagesExtracted"),
+            ("toc_entries", "TocEntries"),
+        )
+        metric_data = []
+        for key, metric_name in mapping:
+            if key in counts and counts[key] is not None:
+                metric_data.append({
+                    "MetricName": metric_name,
+                    "Value": float(counts[key]),
+                    "Unit": "Count",
+                    "Dimensions": [{"Name": "File", "Value": str(filename)[:250]}],
+                })
+        if metric_data:
+            cw.put_metric_data(Namespace=CLOUDWATCH_NAMESPACE, MetricData=metric_data)
+    except Exception as e:
+        logging.warning("Filename : %s | CloudWatch stats emit failed: %s", filename, e)
 
 def download_file_from_s3(bucket_name,file_base_name, file_key, local_path):
     """
@@ -248,67 +269,79 @@ def autotag_pdf_with_options(filename, client_id, client_secret):
     except (ServiceApiException, ServiceUsageException, SdkException) as e:
         logging.error(f'Filename : {filename} | Adobe Autotag API failed: {e}')
         raise  # Re-raise to stop the container
-def extract_api(filename, client_id, client_secret):
+
+def build_local_structured_data(pdf_path, filename):
     """
-    Extracts text, tables, and figures from a PDF using Adobe PDF Services.
-    
-    Args:
-        filename (str): The path to the PDF file.
-        client_id (str): Adobe API client ID.
-        client_secret (str): Adobe API client secret.
-        
-    Raises:
-        ServiceApiException: If Adobe API returns an error.
-        ServiceUsageException: If there's a usage-related error.
-        SdkException: If there's an SDK-related error.
+    Replace Adobe Extract: build heading/text/figure elements with PyMuPDF
+    after Autotag. Writes structuredData.json and figures/ for alt-text mapping.
     """
-    try:
-        with open(filename, 'rb') as file:
-            input_stream = file.read()
+    extract_root = f"output/zipfile/{filename}"
+    figures_dir = os.path.join(extract_root, "figures")
+    os.makedirs(figures_dir, exist_ok=True)
 
-        # Initial setup, create credentials instance
-        credentials = ServicePrincipalCredentials(
-            client_id=client_id,
-            client_secret=client_secret
-        )
-        client_config = ClientConfig(
-            connect_timeout=4000,
-            read_timeout=40000
-            )
-        # Creates a PDF Services instance
-        pdf_services = PDFServices(credentials=credentials, client_config=client_config)
+    doc = pymupdf.open(pdf_path)
+    elements = []
+    figure_count = 0
 
-        # Creates an asset(s) from source file(s) and upload
-        input_asset = pdf_services.upload(input_stream=input_stream, mime_type=PDFServicesMediaType.PDF)
+    for page_index, page in enumerate(doc):
+        page_height = page.rect.height
+        blocks = page.get_text("dict").get("blocks", [])
+        for block in blocks:
+            bbox = block.get("bbox")
+            if not bbox or len(bbox) < 4:
+                continue
+            x0, y0, x1, y1 = bbox
+            # Adobe Extract Bounds are [left, bottom, right, top] (PDF origin).
+            bounds = [x0, page_height - y1, x1, page_height - y0]
+            if block.get("type") == 0:
+                spans = [span for line in block.get("lines", []) for span in line.get("spans", [])]
+                text = "".join(s.get("text", "") for s in spans).strip()
+                if not text:
+                    continue
+                max_size = max((s.get("size", 0) for s in spans), default=0)
+                path = "/Document/P"
+                if max_size >= 18:
+                    path = "/Document/H1"
+                elif max_size >= 16:
+                    path = "/Document/H2"
+                elif max_size >= 14:
+                    path = "/Document/H3"
+                elif max_size >= 13:
+                    path = "/Document/H4"
+                elements.append({
+                    "Path": path,
+                    "Text": text,
+                    "Page": page_index,
+                    "Bounds": bounds,
+                    "attributes": {"BBox": bounds},
+                })
+            elif block.get("type") == 1:
+                try:
+                    pix = page.get_pixmap(clip=pymupdf.Rect(bbox), dpi=144)
+                    fig_name = f"figure{page_index}_{figure_count}.png"
+                    fig_rel = f"figures/{fig_name}"
+                    pix.save(os.path.join(extract_root, fig_rel))
+                    figure_count += 1
+                    elements.append({
+                        "Path": "/Document/Figure",
+                        "Page": page_index,
+                        "Bounds": bounds,
+                        "attributes": {"BBox": bounds},
+                        "filePaths": [fig_rel],
+                    })
+                except Exception as e:
+                    logging.warning("Filename : %s | Could not clip figure on page %s: %s", filename, page_index, e)
 
-        # Create parameters for the job
-        extract_pdf_params = ExtractPDFParams(
-            elements_to_extract=[ExtractElementType.TEXT, ExtractElementType.TABLES],
-            elements_to_extract_renditions=[ExtractRenditionsElementType.TABLES, ExtractRenditionsElementType.FIGURES],
-        )
-
-        # Creates a new job instance
-        extract_pdf_job = ExtractPDFJob(input_asset=input_asset, extract_pdf_params=extract_pdf_params)
-
-        # Submit the job and gets the job result
-        location = pdf_services.submit(extract_pdf_job)
-        pdf_services_response = pdf_services.get_job_result(location, ExtractPDFResult)
-
-        # Get content from the resulting asset(s)
-        result_asset: CloudAsset = pdf_services_response.get_result().get_resource()
-        stream_asset: StreamAsset = pdf_services.get_content(result_asset)
-
-        # Creates an output stream and copy stream asset's content to it
-        os.makedirs("output/ExtractTextInfoFromPDF", exist_ok=True)
-        output_file_path = f"output/ExtractTextInfoFromPDF/extract${filename}.zip"
-        with open(output_file_path, "wb") as file:
-            file.write(stream_asset.get_input_stream())
-        
-        logging.info(f'Filename : {filename} | Adobe Extract API completed successfully')
-
-    except (ServiceApiException, ServiceUsageException, SdkException) as e:
-        logging.error(f'Filename : {filename} | Adobe Extract API failed: {e}')
-        raise  # Re-raise to stop the container
+    data = {"elements": elements}
+    os.makedirs(extract_root, exist_ok=True)
+    with open(os.path.join(extract_root, "structuredData.json"), "w", encoding="utf-8") as file:
+        json.dump(data, file)
+    doc.close()
+    logging.info(
+        "Filename : %s | Local extract (PyMuPDF) wrote %s elements, %s figures",
+        filename, len(elements), figure_count,
+    )
+    return data
 
 def unzip_file(filename,zip_path, extract_to):
     """
@@ -577,6 +610,7 @@ def extract_images_from_excel(filename, figure_path, autotag_report_path, images
         page_num_img = [int(i)-1 for i in page_num_img]
         
         os.makedirs(images_output_dir, exist_ok=True)
+        os.makedirs(figure_path, exist_ok=True)
 
         by_page = extract_images_from_extract_api(filename)
         image_paths = []
@@ -586,19 +620,40 @@ def extract_images_from_excel(filename, figure_path, autotag_report_path, images
         print("Object IDs and Coordinates:", object_ids_cords)
         logging.info(f'Filename : {filename} | Sheet: {sheet} , Sheet Images: {sheet._images}')
 
-        # Loop through all images in the sheet and save them locally.
+        # Prefer Autotag Excel embedded figures (no Adobe Extract zip).
+        saved_excel = []
         for idx, img in enumerate(sheet._images):
             img_type = img.path.split('.')[-1]
-            img_path = os.path.join(images_output_dir, f'image_{idx + 1}.{img_type}')
-            image_paths.append(img_path)
+            img_path = os.path.join(figure_path, f'image_{idx + 1}.{img_type}')
             with open(img_path, 'wb') as f:
                 f.write(img._data())
+            saved_excel.append(img_path)
             logging.info(f'Filename : {filename} | Image {idx + 1} saved as {img_path}')
-        
-        image_paths = [
-            os.path.join(figure_path, f)
-            for f in sorted(os.listdir(figure_path), key=natural_sort_key)
-        ]
+
+        if saved_excel:
+            image_paths = saved_excel
+        else:
+            image_paths = [
+                os.path.join(figure_path, f)
+                for f in sorted(os.listdir(figure_path), key=natural_sort_key)
+                if f.lower().endswith(('.png', '.jpg', '.jpeg', '.gif', '.bmp'))
+            ]
+
+        # Align Autotag Excel bboxes with figure files so sqlite matching still works.
+        for idx, ((objid, cords), pg_num) in enumerate(zip(object_ids_cords, page_num_img)):
+            if idx >= len(image_paths):
+                break
+            left, top, width, height = cords[0], cords[1], cords[2], cords[3]
+            bounds = [left, top - height, left + width, top]
+            fig_name = os.path.basename(image_paths[idx])
+            ele = {
+                "Page": pg_num,
+                "Bounds": bounds,
+                "attributes": {"BBox": bounds},
+                "filePaths": [f"figures/{fig_name}"],
+                "ObjectID": objid,
+            }
+            by_page.setdefault(pg_num, []).append(ele)
         
         for img_path in image_paths:
             s3.upload_file(img_path, bucket_name, f'{s3_folder_autotag}/images/{file_key}_{os.path.basename(img_path)}')
@@ -607,6 +662,8 @@ def extract_images_from_excel(filename, figure_path, autotag_report_path, images
 
         create_sqlite_db(by_page, filename, images_output_dir, object_ids, image_paths, page_num_img, parsed_cordinates, bucket_name, s3_folder_autotag, file_key, object_ids_cords)
     except Exception as e:
+        logging.warning(f'Filename : {filename} | Image extract fallback: {e}')
+        os.makedirs(images_output_dir, exist_ok=True)
         db_path = os.path.join(images_output_dir, "temp_images_data.db")
         if os.path.exists(db_path):
             os.remove(db_path)
@@ -671,28 +728,19 @@ def main():
         logging.info(f'Filename : {file_key} | Adding viewer preferences...')
         add_viewer_preferences(local_file_path, filename)
 
-        # Run Adobe Autotag API
+        # Run Adobe Autotag API (only Adobe job in this container)
         logging.info(f'Filename : {file_key} | Running Adobe Autotag API...')
         autotag_pdf_with_options(filename, client_id, client_secret)
 
-        # Run Adobe Extract API
-        logging.info(f'Filename : {file_key} | Running Adobe Extract API...')
-        extract_api(filename, client_id, client_secret)
-
-        extract_api_zip_path = f"output/ExtractTextInfoFromPDF/extract${filename}.zip"
-        extract_to = f"output/zipfile/{filename}"
-        
-        logging.info(f'Filename : {file_key} | Unzipping extracted content...')
-        unzip_file(filename, extract_api_zip_path, extract_to)
-
-        with open(f"output/zipfile/{filename}/structuredData.json") as file:
-            data = json.load(file)
+        logging.info(f'Filename : {file_key} | Building local extract (PyMuPDF, no Adobe Extract)...')
+        data = build_local_structured_data(filename, filename)
 
         pdf_document = pymupdf.open(filename)
 
         # Add TOC entries
         logging.info(f'Filename : {file_key} | Adding TOC entries...')
         add_toc_to_pdf(filename, pdf_document, data)
+        toc_count = len(pdf_document.get_toc() or [])
 
         pdf_document.saveIncr()
         pdf_document.close()
@@ -702,7 +750,7 @@ def main():
 
         logging.info(f"PDF saved with updated metadata and TOC. File location: COMPLIANT_{file_key}")
 
-        figure_path = f"{extract_to}/figures"
+        figure_path = f"output/zipfile/{filename}/figures"
         autotag_report_path = f"output/AutotagPDF/{filename}.xlsx"
         images_output_dir = "output/zipfile/images"
 
@@ -710,6 +758,22 @@ def main():
         
         logging.info(f'Filename : {file_key} | Extracting and uploading images...')
         extract_images_from_excel(filename, figure_path, autotag_report_path, images_output_dir, bucket_name, s3_folder_autotag, file_key)
+
+        images_extracted = 0
+        if os.path.isdir(figure_path):
+            images_extracted = len([
+                n for n in os.listdir(figure_path)
+                if n.lower().endswith(('.png', '.jpg', '.jpeg', '.gif', '.bmp'))
+            ])
+        emit_stats(
+            file_key,
+            adobe_calls=1,
+            adobe_autotag=1,
+            adobe_extract=0,
+            adobe_precheck=0,
+            images_extracted=images_extracted,
+            toc_entries=toc_count,
+        )
         
         logging.info(f'Filename : {file_key} | Processing completed successfully')
         logger.info(f"File: {file_base_name}, Status: Succeeded in First ECS task")

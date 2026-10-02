@@ -242,13 +242,13 @@ deploy_backend_solution() {
         BUILD_IMAGE="aws/codebuild/amazonlinux-x86_64-standard:5.0"
         COMPUTE_TYPE="BUILD_GENERAL1_SMALL"
         PRIVILEGED_MODE="true"
-        SOURCE_VERSION="main"
+        SOURCE_VERSION="$GITHUB_BRANCH"
         BUILDSPEC_FILE="buildspec-unified.yml"
     else
         BUILD_IMAGE="aws/codebuild/amazonlinux2-x86_64-standard:5.0"
         COMPUTE_TYPE="BUILD_GENERAL1_LARGE"
         PRIVILEGED_MODE="true"
-        SOURCE_VERSION="main"
+        SOURCE_VERSION="$GITHUB_BRANCH"
         BUILDSPEC_FILE="buildspec-unified.yml"
     fi
 
@@ -682,9 +682,12 @@ fi
 print_success "✅ AWS credentials verified. Account: $ACCOUNT_ID, Region: $REGION"
 echo ""
 
-# GitHub repository URL (hardcoded)
-GITHUB_URL="https://github.com/ASUCICREPO/PDF_Accessibility.git"
+# Private evaluation repo. CodeBuild needs a GitHub connection or PAT (repo scope)
+# before it can clone this. Override with: export GITHUB_URL=...  export GITHUB_BRANCH=...
+GITHUB_URL="${GITHUB_URL:-https://github.com/sparient-tech/pdf-remediation-evaluation.git}"
+GITHUB_BRANCH="${GITHUB_BRANCH:-main}"
 print_success "   Repository: $GITHUB_URL ✅"
+print_success "   Branch: $GITHUB_BRANCH ✅"
 echo ""
 
 # CodeBuild project name (hardcoded with timestamp)

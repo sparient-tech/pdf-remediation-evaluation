@@ -124,6 +124,10 @@ class PDFAccessibility(Stack):
             actions=["comprehend:DetectDominantLanguage"],
             resources=["*"],  # Comprehend DetectDominantLanguage does not support resource-level permissions
         ))
+        ecs_task_role.add_to_policy(iam.PolicyStatement(
+            actions=["cloudwatch:PutMetricData"],
+            resources=["*"],
+        ))
         
         # Secrets Manager permissions - scoped to Adobe API credentials
         ecs_task_role.add_to_policy(iam.PolicyStatement(
@@ -361,10 +365,10 @@ class PDFAccessibility(Stack):
         
         remediation_chain = pdf_chunks_map_state.next(pdf_merger_lambda_task).next(title_generator_lambda_task).next(post_remediation_accessibility_checker_task)
 
-        parallel_accessibility_workflow = sfn.Parallel(self, "ParallelAccessibilityWorkflow",
-                                      result_path="$.ParallelResults")
-        parallel_accessibility_workflow.branch(remediation_chain)
-        parallel_accessibility_workflow.branch(pre_remediation_accessibility_checker_task)
+        # Pre-check Lambda stays deployed but is not in the workflow. It was a
+        # fourth Adobe job and its 900s timeout aborted Autotag (exit 137).
+        # Post-check still runs so the remediating PDF and checker stats are unchanged.
+        _ = pre_remediation_accessibility_checker_task
 
         pdf_remediation_workflow_log_group = logs.LogGroup(self, "PdfRemediationWorkflowLogs",
             log_group_name="/aws/states/pdf-accessibility-remediation-workflow",
@@ -374,7 +378,7 @@ class PDFAccessibility(Stack):
         # State Machine
 
         pdf_remediation_state_machine = sfn.StateMachine(self, "PdfAccessibilityRemediationWorkflow",
-                                         definition=parallel_accessibility_workflow,
+                                         definition=remediation_chain,
                                          timeout=Duration.minutes(150),
                                          logs=sfn.LogOptions(
                                              destination=pdf_remediation_workflow_log_group,
@@ -414,7 +418,7 @@ class PDFAccessibility(Stack):
         pdf_merger_lambda_log_group_name = f"/aws/lambda/{pdf_merger_lambda.function_name}"
         title_generator_lambda_log_group_name = f"/aws/lambda/{title_generator_lambda.function_name}"
         pre_remediation_checker_log_group_name = f"/aws/lambda/{pre_remediation_accessibility_checker.function_name}"
-        post_remediation_checker_log_group_name = f"aws/lambda/{post_remediation_accessibility_checker.function_name}"
+        post_remediation_checker_log_group_name = f"/aws/lambda/{post_remediation_accessibility_checker.function_name}"
 
 
 
@@ -480,6 +484,36 @@ class PDFAccessibility(Stack):
                 log_group_names=[pdf_merger_lambda_log_group_name],
                 query_string='''fields @message 
                                 | filter @message like /filename/''',
+                width=24,
+                height=6
+            ),
+            cloudwatch.GraphWidget(
+                title="Adobe API calls (sum)",
+                left=[
+                    cloudwatch.Metric(namespace="PDFAccessibility", metric_name="AdobeApiCalls", statistic="Sum"),
+                    cloudwatch.Metric(namespace="PDFAccessibility", metric_name="AdobeAutotagJobs", statistic="Sum"),
+                    cloudwatch.Metric(namespace="PDFAccessibility", metric_name="AdobeExtractJobs", statistic="Sum"),
+                    cloudwatch.Metric(namespace="PDFAccessibility", metric_name="AdobeCheckerJobs", statistic="Sum"),
+                ],
+                width=12,
+                height=6,
+            ),
+            cloudwatch.GraphWidget(
+                title="Post-check accessibility (sum)",
+                left=[
+                    cloudwatch.Metric(namespace="PDFAccessibility", metric_name="AccessibilityPassed", statistic="Sum"),
+                    cloudwatch.Metric(namespace="PDFAccessibility", metric_name="AccessibilityFailed", statistic="Sum"),
+                    cloudwatch.Metric(namespace="PDFAccessibility", metric_name="AccessibilityNeedsManual", statistic="Sum"),
+                ],
+                width=12,
+                height=6,
+            ),
+            cloudwatch.LogQueryWidget(
+                title="Remediation STATS",
+                log_group_names=[adobe_autotag_log_group.log_group_name, post_remediation_checker_log_group_name],
+                query_string='''fields @timestamp, @message
+                    | filter @message like /STATS /
+                    | sort @timestamp desc''',
                 width=24,
                 height=6
             ),

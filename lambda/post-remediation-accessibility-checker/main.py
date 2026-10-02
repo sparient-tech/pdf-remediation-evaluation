@@ -12,6 +12,95 @@ from adobe.pdfservices.operation.pdfjobs.result.pdf_accessibility_checker_result
 from botocore.exceptions import ClientError
 import re
 
+CLOUDWATCH_NAMESPACE = "PDFAccessibility"
+
+
+def _as_int(value):
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, (int, float)):
+        return int(value)
+    if isinstance(value, str):
+        digits = value.replace(",", "").strip()
+        if digits.isdigit():
+            return int(digits)
+    return None
+
+
+def summarize_accessibility_report(report):
+    """Pull Passed / Failed / Needs manual check from Adobe checker JSON."""
+    summary = {}
+    if isinstance(report, dict):
+        for key in ("Summary", "summary"):
+            if isinstance(report.get(key), dict):
+                summary = report[key]
+                break
+
+    def pick(*names):
+        for name in names:
+            if name in summary:
+                parsed = _as_int(summary[name])
+                if parsed is not None:
+                    return parsed
+            if isinstance(report, dict) and name in report:
+                parsed = _as_int(report[name])
+                if parsed is not None:
+                    return parsed
+        return 0
+
+    return {
+        "passed": pick("Passed", "passed"),
+        "failed": pick("Failed", "failed"),
+        "needs_manual_check": pick("Needs manual check", "NeedsManualCheck", "needs_manual_check"),
+    }
+
+
+def emit_stats(filename, **counts):
+    payload = {"filename": filename, **counts}
+    print("STATS " + json.dumps(payload))
+    try:
+        cw = boto3.client("cloudwatch")
+        mapping = (
+            ("adobe_calls", "AdobeApiCalls"),
+            ("adobe_postcheck", "AdobeCheckerJobs"),
+            ("passed", "AccessibilityPassed"),
+            ("failed", "AccessibilityFailed"),
+            ("needs_manual_check", "AccessibilityNeedsManual"),
+        )
+        metric_data = []
+        for key, metric_name in mapping:
+            if key in counts and counts[key] is not None:
+                metric_data.append({
+                    "MetricName": metric_name,
+                    "Value": float(counts[key]),
+                    "Unit": "Count",
+                    "Dimensions": [{"Name": "File", "Value": str(filename)[:250]}],
+                })
+        if metric_data:
+            cw.put_metric_data(Namespace=CLOUDWATCH_NAMESPACE, MetricData=metric_data)
+    except Exception as e:
+        print(f"Filename : {filename} | CloudWatch stats emit failed: {e}")
+
+
+def save_stats_to_s3(bucket_name, file_key, stats):
+    file_key_without_extension = os.path.splitext(file_key)[0]
+    file_key_without_compliant = file_key_without_extension.replace("COMPLIANT_", "", 1)
+    bucket_save_path = (
+        f"temp/{file_key_without_compliant}/accessability-report/"
+        f"{file_key_without_extension}_remediation_stats.json"
+    )
+    s3 = boto3.client("s3")
+    s3.put_object(
+        Bucket=bucket_name,
+        Key=bucket_save_path,
+        Body=json.dumps(stats, indent=2).encode("utf-8"),
+        ContentType="application/json",
+    )
+    print(f"Filename {file_key} | Uploaded remediation stats to {bucket_save_path}")
+    return bucket_save_path
+
 def create_json_output_file_path():
         os.makedirs("/tmp/PDFAccessibilityChecker", exist_ok=True)
         return f"/tmp/PDFAccessibilityChecker/result_after_remediation.json"
@@ -133,6 +222,36 @@ def lambda_handler(event, context):
 
         bucket_save_path = save_to_s3(s3_bucket, file_basename)
         print(f"Filename : {file_basename} | Saved accessibility report to {bucket_save_path}")
+
+        counts = {"passed": 0, "failed": 0, "needs_manual_check": 0}
+        try:
+            with open(output_file_path_json, "r", encoding="utf-8") as report_file:
+                report_json = json.load(report_file)
+            counts = summarize_accessibility_report(report_json)
+        except Exception as parse_error:
+            print(f"Filename : {file_basename} | Could not parse checker JSON for stats: {parse_error}")
+
+        stats = {
+            "filename": file_basename,
+            "adobe_calls_this_step": 1,
+            "adobe_postcheck": 1,
+            "adobe_precheck": 0,
+            "adobe_extract": 0,
+            "adobe_autotag": 1,
+            "adobe_jobs_per_pdf": 2,
+            "report_s3": bucket_save_path,
+            **counts,
+        }
+        stats_path = save_stats_to_s3(s3_bucket, file_basename, stats)
+        stats["stats_s3"] = stats_path
+        emit_stats(
+            file_basename,
+            adobe_calls=1,
+            adobe_postcheck=1,
+            passed=counts["passed"],
+            failed=counts["failed"],
+            needs_manual_check=counts["needs_manual_check"],
+        )
 
     except (ServiceApiException, ServiceUsageException, SdkException) as e:
         print(f'Filename : {file_basename} | Exception encountered while executing operation at post accessibility check: {e}')
