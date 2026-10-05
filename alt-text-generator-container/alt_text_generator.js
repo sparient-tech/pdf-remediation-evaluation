@@ -421,6 +421,29 @@ async function modifyPDF(zipped, bucketName, inputKey, outputKey, filebasename) 
 }
 
 /**
+ * Use the S3 key Auto-Tag stored in sqlite. Do not invent
+ * `{pdfName}_{figure0_0.png}` — that object is not uploaded.
+ */
+function resolveImageS3Key(imgPath, s3FileKey) {
+    if (!imgPath) {
+        return imgPath;
+    }
+    const normalized = String(imgPath).replace(/\\/g, '/');
+    if (normalized.startsWith('temp/')) {
+        return normalized;
+    }
+    const parts = (s3FileKey || '').split('/').filter(Boolean);
+    const folderName = parts[1] || '';
+    const pdfName = parts[parts.length - 1] || '';
+    const fileName = normalized.split('/').pop();
+    const folder = `temp/${folderName}/output_autotag/images`;
+    if (pdfName && fileName.startsWith(`${pdfName}_`)) {
+        return `${folder}/${fileName}`;
+    }
+    return `${folder}/${pdfName}_${fileName}`;
+}
+
+/**
  * Main process function that orchestrates the retrieval of image data, 
  * generates alt text for images and links, and modifies the PDF accordingly.
  * This function fetches necessary data from S3, processes images to generate alt text,
@@ -463,11 +486,12 @@ async function startProcess() {
         try {
             const rows = db.prepare('SELECT * FROM image_data').all();
             imageObjects = rows.map((row) => {
-                const splitKey = process.env.S3_FILE_KEY.split('/');
-                logger.info(`thr path in the loop: temp/${splitKey[1]}/output_autotag/images/${row.img_path}`);
+                const imageKey = resolveImageS3Key(row.img_path, process.env.S3_FILE_KEY);
+                logger.info(`Filename: ${filebasename} | DB img_path: ${row.img_path}`);
+                logger.info(`Filename: ${filebasename} | Resolved Image Object Path: ${imageKey}`);
                 return {
                     id: row.objid,
-                    path: `temp/${splitKey[1]}/output_autotag/images/${splitKey.pop()}_${row.img_path}`,
+                    path: imageKey,
                     context_json: {
                         context: row.context,
                     },
@@ -499,6 +523,7 @@ async function startProcess() {
                     Key: imageObject.path,
                 };
                 logger.info(`Filename: ${filebasename} | Image Object Path: ${imageObject.path}`);
+                logger.info(`Filename: ${filebasename} | s3:GetObject Bucket=${bucketName} Key=${imageObject.path}`);
                 logger.info(`Filename: ${filebasename} | Image Object Bucketname: ${bucketName}`);
                 const command = new GetObjectCommand(getObjectParams);
                 const { Body } = await s3Client.send(command);

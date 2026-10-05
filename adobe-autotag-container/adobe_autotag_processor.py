@@ -448,7 +448,8 @@ def is_bbox_match(api_bbox, excel_bbox,tol=7):
             diff_x <= tol and diff_y <= tol)
 
 def create_sqlite_db(by_page, filename, images_output_dir, object_ids, image_paths,
-                     page_num_img, parsed_cordinates, bucket_name, s3_folder_autotag, file_key, object_ids_cords):
+                     page_num_img, parsed_cordinates, bucket_name, s3_folder_autotag, file_key, object_ids_cords,
+                     uploaded_s3_keys=None):
     # Build the SQLite database file path and create a new database.
     db_path = os.path.join(images_output_dir, "temp_images_data.db")
     if os.path.exists(db_path):
@@ -469,12 +470,13 @@ def create_sqlite_db(by_page, filename, images_output_dir, object_ids, image_pat
     
     # This set ensures that a candidate from the API is only assigned once.
     assigned_candidates = set()
+    uploaded_s3_keys = uploaded_s3_keys or {}
 
     # Process each Excel row (each image from Excel)
     for objid, pg_num, excel_bbox in zip(object_ids, page_num_img, object_ids_cords):
         if pg_num not in by_page:
             logging.warning(f"Page {pg_num} not found in API data for file {filename}.")
-            context = "No API data for this page."
+            continue
         else:
             # --------------------------------------------------------------------
             # 1. Identify the current candidate using bounding box matching.
@@ -512,6 +514,12 @@ def create_sqlite_db(by_page, filename, images_output_dir, object_ids, image_pat
                     if is_bbox_match(ele["Bounds"], excel_bbox[1], tol=7):
                         ele["objid"] = excel_bbox[0]
                         candidates.append(ele)
+
+            # Prefer Auto-Tag uploaded objects over local PyMuPDF figure clips
+            # (figure0_0.png is not the S3 object name).
+            uploaded_candidates = [c for c in candidates if c.get("s3_key")]
+            if uploaded_candidates:
+                candidates = uploaded_candidates
 
             if len(candidates) == 1:
                 current_candidate = candidates[0]
@@ -555,17 +563,27 @@ def create_sqlite_db(by_page, filename, images_output_dir, object_ids, image_pat
         print(f"{'<IMAGE INTERESTED>' in context}")
         print("context:", context)
         print(" ======================")
-        # Insert the data into the SQLite database.
+        stored_image_ref = current_candidate.get("s3_key")
+        if not stored_image_ref:
+            local_name = current_candidate["filePaths"][0].split("/")[-1]
+            stored_image_ref = uploaded_s3_keys.get(
+                local_name,
+                f"{s3_folder_autotag}/images/{file_key}_{local_name}",
+            )
+        # Insert the actual S3 object key so alt-text does not invent a filename.
         cursor.execute("""
             INSERT INTO image_data (objid, img_path, context)
             VALUES (?, ?, ?)
         """, (
             current_candidate["objid"],
-            current_candidate["filePaths"][0].split("/")[-1],
+            stored_image_ref,
             context
         ))
-        print("Added in the database: ", current_candidate["objid"],
-            current_candidate["filePaths"][0].split("/")[-1])
+        print("Added in the database: ", current_candidate["objid"], stored_image_ref)
+        logging.info(
+            "Filename : %s | SQLite image mapping objid=%s s3_key=%s",
+            filename, current_candidate["objid"], stored_image_ref,
+        )
     conn.commit()
     conn.close()
     logging.info(f'Filename : {filename} | SQLite DB created with image data')
@@ -640,27 +658,38 @@ def extract_images_from_excel(filename, figure_path, autotag_report_path, images
             ]
 
         # Align Autotag Excel bboxes with figure files so sqlite matching still works.
+        uploaded_s3_keys = {}
         for idx, ((objid, cords), pg_num) in enumerate(zip(object_ids_cords, page_num_img)):
             if idx >= len(image_paths):
                 break
             left, top, width, height = cords[0], cords[1], cords[2], cords[3]
             bounds = [left, top - height, left + width, top]
             fig_name = os.path.basename(image_paths[idx])
+            s3_object_key = f"{s3_folder_autotag}/images/{file_key}_{fig_name}"
+            uploaded_s3_keys[fig_name] = s3_object_key
             ele = {
                 "Page": pg_num,
                 "Bounds": bounds,
                 "attributes": {"BBox": bounds},
                 "filePaths": [f"figures/{fig_name}"],
                 "ObjectID": objid,
+                "s3_key": s3_object_key,
             }
             by_page.setdefault(pg_num, []).append(ele)
         
         for img_path in image_paths:
-            s3.upload_file(img_path, bucket_name, f'{s3_folder_autotag}/images/{file_key}_{os.path.basename(img_path)}')
-            logging.info(f'Filename : {filename} | Uploaded image to S3')
+            object_name = f"{file_key}_{os.path.basename(img_path)}"
+            s3_object_key = f"{s3_folder_autotag}/images/{object_name}"
+            uploaded_s3_keys[os.path.basename(img_path)] = s3_object_key
+            s3.upload_file(img_path, bucket_name, s3_object_key)
+            logging.info(f'Filename : {filename} | Uploaded image to S3 key {s3_object_key}')
         logging.info(f'Filename : {filename} | Object IDs: {object_ids} : Image Paths: {image_paths}')
 
-        create_sqlite_db(by_page, filename, images_output_dir, object_ids, image_paths, page_num_img, parsed_cordinates, bucket_name, s3_folder_autotag, file_key, object_ids_cords)
+        create_sqlite_db(
+            by_page, filename, images_output_dir, object_ids, image_paths,
+            page_num_img, parsed_cordinates, bucket_name, s3_folder_autotag,
+            file_key, object_ids_cords, uploaded_s3_keys=uploaded_s3_keys,
+        )
     except Exception as e:
         logging.warning(f'Filename : {filename} | Image extract fallback: {e}')
         os.makedirs(images_output_dir, exist_ok=True)
