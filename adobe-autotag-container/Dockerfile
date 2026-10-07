@@ -10,7 +10,28 @@ COPY . /app
 # Create required directories
 RUN mkdir -p /output/AutotagPDF \
     /output/ExtractTextInfoFromPDF \
-    /output/zipfile/images
+    /output/zipfile/images \
+    /opt/verapdf
+
+# veraPDF CLI (PDF/UA-1 gate before Adobe Autotag). Keep heap under Fargate 1GB.
+ENV VERAPDF_VERSION=1.30
+ENV VERAPDF_MINOR_VERSION=1
+ENV JAVA_TOOL_OPTIONS="-Xmx384m"
+ENV PATH="/opt/verapdf:${PATH}"
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends default-jre-headless wget unzip ca-certificates && \
+    wget -qO /tmp/verapdf-installer.zip \
+      https://software.verapdf.org/releases/${VERAPDF_VERSION}/verapdf-greenfield-${VERAPDF_VERSION}.${VERAPDF_MINOR_VERSION}-installer.zip && \
+    unzip -q /tmp/verapdf-installer.zip -d /tmp && \
+    java -Djava.awt.headless=true -jar \
+      /tmp/verapdf-greenfield-${VERAPDF_VERSION}.${VERAPDF_MINOR_VERSION}/verapdf-izpack-installer-${VERAPDF_VERSION}.${VERAPDF_MINOR_VERSION}.jar \
+      /app/verapdf-install.xml && \
+    ln -sf /opt/verapdf/verapdf /usr/local/bin/verapdf && \
+    rm -rf /tmp/verapdf-installer.zip /tmp/verapdf-greenfield-${VERAPDF_VERSION}.${VERAPDF_MINOR_VERSION} && \
+    apt-get purge -y wget unzip && \
+    apt-get autoremove -y && \
+    rm -rf /var/lib/apt/lists/*
 
 # Install Python dependencies and clean up unnecessary packages
 RUN pip install --no-cache-dir -r requirements.txt && \

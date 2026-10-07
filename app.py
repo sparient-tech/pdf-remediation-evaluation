@@ -492,8 +492,10 @@ class PDFAccessibility(Stack):
                 left=[
                     cloudwatch.Metric(namespace="PDFAccessibility", metric_name="AdobeApiCalls", statistic="Sum"),
                     cloudwatch.Metric(namespace="PDFAccessibility", metric_name="AdobeAutotagJobs", statistic="Sum"),
+                    cloudwatch.Metric(namespace="PDFAccessibility", metric_name="AdobeAutotagSkipped", statistic="Sum"),
                     cloudwatch.Metric(namespace="PDFAccessibility", metric_name="AdobeExtractJobs", statistic="Sum"),
                     cloudwatch.Metric(namespace="PDFAccessibility", metric_name="AdobeCheckerJobs", statistic="Sum"),
+                    cloudwatch.Metric(namespace="PDFAccessibility", metric_name="VeraPdfFailedRules", statistic="Sum"),
                 ],
                 width=12,
                 height=6,

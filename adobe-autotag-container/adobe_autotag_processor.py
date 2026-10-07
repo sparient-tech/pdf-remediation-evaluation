@@ -76,6 +76,7 @@ from adobe.pdfservices.operation.pdf_services import PDFServices, ClientConfig
 from adobe.pdfservices.operation.pdfjobs.jobs.autotag_pdf_job import AutotagPDFJob
 from adobe.pdfservices.operation.pdfjobs.params.autotag_pdf.autotag_pdf_params import AutotagPDFParams
 from adobe.pdfservices.operation.pdfjobs.result.autotag_pdf_result import AutotagPDFResult
+from verapdf_check import run_verapdf, save_verapdf_artifacts
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -97,6 +98,8 @@ def emit_stats(filename, **counts):
             ("adobe_precheck", "AdobePrecheckJobs"),
             ("images_extracted", "ImagesExtracted"),
             ("toc_entries", "TocEntries"),
+            ("verapdf_failed_rules", "VeraPdfFailedRules"),
+            ("adobe_autotag_skipped", "AdobeAutotagSkipped"),
         )
         metric_data = []
         for key, metric_name in mapping:
@@ -720,6 +723,75 @@ def extract_images_from_excel(filename, figure_path, autotag_report_path, images
                         f'{s3_folder_autotag}/{file_key}_temp_images_data.db')
         logging.info(f'Filename : {filename} | Uploaded SQLite DB to S3 With No Images')
 
+
+def extract_images_from_local_figures(filename, figure_path, images_output_dir, bucket_name, s3_folder_autotag, file_key):
+    """When Autotag is skipped there is no Excel report; map PyMuPDF figures into sqlite."""
+    os.makedirs(images_output_dir, exist_ok=True)
+    os.makedirs(figure_path, exist_ok=True)
+    by_page = extract_images_from_extract_api(filename)
+    image_paths = [
+        os.path.join(figure_path, name)
+        for name in sorted(os.listdir(figure_path), key=natural_sort_key)
+        if name.lower().endswith(('.png', '.jpg', '.jpeg', '.gif', '.bmp'))
+    ]
+    uploaded_s3_keys = {}
+    object_ids = []
+    page_num_img = []
+    parsed_cordinates = []
+    object_ids_cords = []
+    idx = 0
+    for pg_num, elements in by_page.items():
+        for ele in elements:
+            paths = [
+                path for path in ele.get("filePaths") or []
+                if path.lower().endswith(('.png', '.jpg', '.jpeg', '.gif', '.bmp'))
+            ]
+            if not paths:
+                continue
+            idx += 1
+            objid = str(idx)
+            fig_name = os.path.basename(paths[0])
+            s3_object_key = f"{s3_folder_autotag}/images/{file_key}_{fig_name}"
+            ele["s3_key"] = s3_object_key
+            ele["objid"] = objid
+            uploaded_s3_keys[fig_name] = s3_object_key
+            bounds = ele.get("Bounds") or [0, 0, 0, 0]
+            left, bottom, right, top = bounds[0], bounds[1], bounds[2], bounds[3]
+            cords = [left, top, right - left, top - bottom]
+            object_ids.append(objid)
+            page_num_img.append(pg_num)
+            parsed_cordinates.append(cords)
+            object_ids_cords.append((objid, cords))
+    for img_path in image_paths:
+        fig_name = os.path.basename(img_path)
+        s3_object_key = uploaded_s3_keys.get(
+            fig_name, f"{s3_folder_autotag}/images/{file_key}_{fig_name}"
+        )
+        uploaded_s3_keys[fig_name] = s3_object_key
+        s3.upload_file(img_path, bucket_name, s3_object_key)
+        logging.info(f'Filename : {filename} | Uploaded local figure to S3 key {s3_object_key}')
+    create_sqlite_db(
+        by_page, filename, images_output_dir, object_ids, image_paths,
+        page_num_img, parsed_cordinates, bucket_name, s3_folder_autotag,
+        file_key, object_ids_cords, uploaded_s3_keys=uploaded_s3_keys,
+    )
+
+
+def upload_verapdf_reports(json_path, raw_path, bucket_name, file_base_name, file_key):
+    prefix = f"temp/{file_base_name}/accessability-report"
+    uploaded = []
+    if json_path and os.path.isfile(json_path):
+        key = f"{prefix}/{file_key}_verapdf_summary.json"
+        s3.upload_file(json_path, bucket_name, key)
+        uploaded.append(key)
+    if raw_path and os.path.isfile(raw_path):
+        key = f"{prefix}/{file_key}_verapdf_report.json"
+        s3.upload_file(raw_path, bucket_name, key)
+        uploaded.append(key)
+    logging.info("Filename : %s | Uploaded veraPDF reports: %s", file_key, uploaded)
+    return uploaded
+
+
 def main():
     """
     Main function that coordinates the downloading, processing, and uploading of PDF files and associated content.
@@ -749,17 +821,36 @@ def main():
         base_filename = os.path.basename(local_file_path)
         filename = "COMPLIANT_" + base_filename
 
-        # Get Adobe API credentials
-        logging.info(f'Filename : {file_key} | Retrieving Adobe API credentials...')
-        client_id, client_secret = get_secret(base_filename)
-
         # Add viewer preferences
         logging.info(f'Filename : {file_key} | Adding viewer preferences...')
         add_viewer_preferences(local_file_path, filename)
 
-        # Run Adobe Autotag API (only Adobe job in this container)
-        logging.info(f'Filename : {file_key} | Running Adobe Autotag API...')
-        autotag_pdf_with_options(filename, client_id, client_secret)
+        logging.info(f'Filename : {file_key} | Running veraPDF PDF/UA-1 gate...')
+        verapdf_summary = run_verapdf(filename)
+        json_path, raw_path = save_verapdf_artifacts(verapdf_summary, f"output/{file_key}")
+        upload_verapdf_reports(json_path, raw_path, bucket_name, file_base_name, file_key)
+        call_adobe = bool(verapdf_summary.get("call_adobe_autotag"))
+        logging.info(
+            "Filename : %s | veraPDF decision call_adobe_autotag=%s reason=%s compliant=%s "
+            "has_structure_tree=%s failed_rules=%s tagging_failures=%s",
+            file_key,
+            call_adobe,
+            verapdf_summary.get("decision_reason"),
+            verapdf_summary.get("is_compliant"),
+            verapdf_summary.get("has_structure_tree"),
+            verapdf_summary.get("failed_rules"),
+            len(verapdf_summary.get("tagging_failed_rules") or []),
+        )
+
+        if call_adobe:
+            logging.info(f'Filename : {file_key} | Retrieving Adobe API credentials...')
+            client_id, client_secret = get_secret(base_filename)
+            logging.info(f'Filename : {file_key} | Running Adobe Autotag API...')
+            autotag_pdf_with_options(filename, client_id, client_secret)
+        else:
+            logging.info(
+                f'Filename : {file_key} | Skipping Adobe Autotag ({verapdf_summary.get("decision_reason")})'
+            )
 
         logging.info(f'Filename : {file_key} | Building local extract (PyMuPDF, no Adobe Extract)...')
         data = build_local_structured_data(filename, filename)
@@ -786,7 +877,10 @@ def main():
         s3_folder_autotag = f"temp/{file_base_name}/output_autotag"
         
         logging.info(f'Filename : {file_key} | Extracting and uploading images...')
-        extract_images_from_excel(filename, figure_path, autotag_report_path, images_output_dir, bucket_name, s3_folder_autotag, file_key)
+        if call_adobe:
+            extract_images_from_excel(filename, figure_path, autotag_report_path, images_output_dir, bucket_name, s3_folder_autotag, file_key)
+        else:
+            extract_images_from_local_figures(filename, figure_path, images_output_dir, bucket_name, s3_folder_autotag, file_key)
 
         images_extracted = 0
         if os.path.isdir(figure_path):
@@ -794,14 +888,19 @@ def main():
                 n for n in os.listdir(figure_path)
                 if n.lower().endswith(('.png', '.jpg', '.jpeg', '.gif', '.bmp'))
             ])
+        adobe_autotag = 1 if call_adobe else 0
         emit_stats(
             file_key,
-            adobe_calls=1,
-            adobe_autotag=1,
+            adobe_calls=adobe_autotag,
+            adobe_autotag=adobe_autotag,
             adobe_extract=0,
             adobe_precheck=0,
+            adobe_autotag_skipped=0 if call_adobe else 1,
             images_extracted=images_extracted,
             toc_entries=toc_count,
+            verapdf_failed_rules=verapdf_summary.get("failed_rules") or 0,
+            verapdf_compliant=1 if verapdf_summary.get("is_compliant") else 0,
+            call_adobe_autotag=adobe_autotag,
         )
         
         logging.info(f'Filename : {file_key} | Processing completed successfully')

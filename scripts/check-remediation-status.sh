@@ -38,9 +38,13 @@ aws stepfunctions describe-execution --execution-arn "$EXEC" --query "{status:st
 echo
 
 echo "=== Autotag logs (last 1h) ==="
-echo "Look for: local extract (PyMuPDF)  and  STATS"
+echo "Look for: veraPDF decision  and  STATS"
 echo "Should NOT see: Running Adobe Extract API"
 aws logs tail /ecs/pdf-remediation/adobe-autotag --since 1h --format short || true
+echo
+
+echo "=== veraPDF summaries (call Adobe or skip) ==="
+aws s3 ls "s3://${BUCKET}/temp/" --recursive | grep verapdf || echo "(none yet — Autotag container has not finished)"
 echo
 
 echo "=== Stats JSON in S3 ==="
