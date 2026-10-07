@@ -65,7 +65,7 @@ import pymupdf
 import json
 import re
 import zipfile
-from pypdf import PdfReader, PdfWriter
+import shutil
 
 from adobe.pdfservices.operation.auth.service_principal_credentials import ServicePrincipalCredentials
 from adobe.pdfservices.operation.exception.exceptions import ServiceApiException, ServiceUsageException, SdkException
@@ -76,7 +76,7 @@ from adobe.pdfservices.operation.pdf_services import PDFServices, ClientConfig
 from adobe.pdfservices.operation.pdfjobs.jobs.autotag_pdf_job import AutotagPDFJob
 from adobe.pdfservices.operation.pdfjobs.params.autotag_pdf.autotag_pdf_params import AutotagPDFParams
 from adobe.pdfservices.operation.pdfjobs.result.autotag_pdf_result import AutotagPDFResult
-from verapdf_check import run_verapdf, save_verapdf_artifacts
+from verapdf_check import has_structure_tree, run_verapdf, save_verapdf_artifacts
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -186,20 +186,22 @@ def get_secret(basefilename):
     return client_id, client_secret
 
 def add_viewer_preferences(pdf_path, filename):
-    reader = PdfReader(pdf_path)
-    writer = PdfWriter()
-
-    # Add all pages to the writer
-    for page in reader.pages:
-        writer.add_page(page)
-
-    writer.create_viewer_preferences()
-    writer.viewer_preferences.display_doctitle = True
-
-    # Write the updated PDF to a file
-    with open(filename, "wb") as f:
-        writer.write(f)
-    logger.info(f'Filename : {filename} | Viewer preferences added to the PDF')
+    """Set DisplayDocTitle without rewriting pages (pypdf add_page drops StructTreeRoot)."""
+    if os.path.abspath(pdf_path) != os.path.abspath(filename):
+        shutil.copy2(pdf_path, filename)
+    doc = pymupdf.open(filename)
+    try:
+        catalog = doc.pdf_catalog()
+        key_type, value = doc.xref_get_key(catalog, "ViewerPreferences")
+        if key_type == "xref":
+            vp_xref = int(str(value).split()[0])
+            doc.xref_set_key(vp_xref, "DisplayDocTitle", "true")
+        else:
+            doc.xref_set_key(catalog, "ViewerPreferences", "<< /DisplayDocTitle true >>")
+        doc.saveIncr()
+        logger.info(f'Filename : {filename} | Viewer preferences added to the PDF')
+    finally:
+        doc.close()
 
 def autotag_pdf_with_options(filename, client_id, client_secret):
     """
@@ -821,7 +823,12 @@ def main():
         base_filename = os.path.basename(local_file_path)
         filename = "COMPLIANT_" + base_filename
 
-        # Add viewer preferences
+        logging.info(
+            f'Filename : {file_key} | Downloaded PDF has_structure_tree=%s',
+            has_structure_tree(local_file_path),
+        )
+
+        # Add viewer preferences (incremental; must not strip tags)
         logging.info(f'Filename : {file_key} | Adding viewer preferences...')
         add_viewer_preferences(local_file_path, filename)
 

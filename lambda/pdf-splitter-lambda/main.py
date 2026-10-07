@@ -70,6 +70,26 @@ def split_pdf_into_pages(source_content, original_key, s3_client, bucket_name, p
     
     chunks = []
 
+    # One chunk: keep the original bytes so StructTreeRoot / tags survive.
+    # pypdf add_page() rebuilds pages only and drops the structure tree.
+    if num_pages <= pages_per_chunk:
+        page_filename = f"{file_basename}_chunk_1.pdf"
+        s3_key = f"temp/{file_basename}/{page_filename}"
+        s3_client.upload_fileobj(
+            Fileobj=io.BytesIO(source_content),
+            Bucket=bucket_name,
+            Key=s3_key
+        )
+        print(
+            f'Filename - {page_filename} | Uploaded original PDF unchanged '
+            f'({num_pages} page(s), tags preserved) to {s3_key}'
+        )
+        return [{
+            "s3_bucket": bucket_name,
+            "s3_key": s3_key,
+            "chunk_key": s3_key
+        }]
+
     # Iterate through the PDF pages in chunks
     for start in range(0, num_pages, pages_per_chunk):
         output = io.BytesIO()
