@@ -15,6 +15,9 @@ from aws_cdk import (
     aws_logs as logs,
     aws_ecr_assets as ecr_assets,
     aws_cloudwatch as cloudwatch,
+    aws_cloudfront as cloudfront,
+    aws_cloudfront_origins as origins,
+    aws_secretsmanager as secretsmanager,
 )
 from constructs import Construct
 import platform
@@ -29,7 +32,15 @@ class PDFAccessibility(Stack):
                           encryption=s3.BucketEncryption.S3_MANAGED, 
                           enforce_ssl=True,
                           versioned=True,
-                          removal_policy=cdk.RemovalPolicy.RETAIN)
+                          removal_policy=cdk.RemovalPolicy.RETAIN,
+                          block_public_access=s3.BlockPublicAccess.BLOCK_ALL,
+                          cors=[s3.CorsRule(
+                              allowed_methods=[s3.HttpMethods.GET, s3.HttpMethods.PUT, s3.HttpMethods.HEAD],
+                              allowed_origins=["*"],
+                              allowed_headers=["*"],
+                              exposed_headers=["ETag", "Content-Length", "Content-Type"],
+                              max_age=3000,
+                          )])
         
         # Get account and region for use throughout the stack
         account_id = Stack.of(self).account
@@ -413,6 +424,97 @@ class PDFAccessibility(Stack):
 
         # Pass State Machine ARN to Lambda as an Environment Variable
         pdf_splitter_lambda.add_environment("STATE_MACHINE_ARN", pdf_remediation_state_machine.state_machine_arn)
+
+        # UI API: uploads/ does not trigger remediating; copy to pdf/ does.
+        ui_session_secret = secretsmanager.Secret(
+            self, "UiSessionSecret",
+            generate_secret_string=secretsmanager.SecretStringGenerator(
+                password_length=48,
+                exclude_punctuation=True,
+            ),
+        )
+        ui_api_lambda = lambda_.Function(
+            self, "RemediationUiApi",
+            runtime=lambda_.Runtime.PYTHON_3_12,
+            handler="main.lambda_handler",
+            code=lambda_.Code.from_asset("lambda/ui-api"),
+            timeout=Duration.seconds(30),
+            memory_size=256,
+            environment={
+                "BUCKET_NAME": pdf_processing_bucket.bucket_name,
+                "TOKEN_SECRET_ARN": ui_session_secret.secret_arn,
+                "DEMO_USER": "amol.ganjare@sparient.com",
+                "DEMO_PASS": "sparient123",
+            },
+        )
+        ui_session_secret.grant_read(ui_api_lambda)
+        ui_api_lambda.add_to_role_policy(iam.PolicyStatement(
+            actions=["s3:ListBucket"],
+            resources=[pdf_processing_bucket.bucket_arn],
+            conditions={"StringLike": {"s3:prefix": [
+                "uploads", "uploads/*",
+                "pdf", "pdf/*",
+                "result", "result/*",
+                "temp", "temp/*",
+            ]}},
+        ))
+        ui_api_lambda.add_to_role_policy(iam.PolicyStatement(
+            actions=["s3:GetObject"],
+            resources=[
+                pdf_processing_bucket.arn_for_objects("uploads/*"),
+                pdf_processing_bucket.arn_for_objects("pdf/*"),
+                pdf_processing_bucket.arn_for_objects("result/*"),
+                pdf_processing_bucket.arn_for_objects("temp/*"),
+            ],
+        ))
+        ui_api_lambda.add_to_role_policy(iam.PolicyStatement(
+            actions=["s3:PutObject"],
+            resources=[
+                pdf_processing_bucket.arn_for_objects("uploads/*"),
+                pdf_processing_bucket.arn_for_objects("pdf/*"),
+            ],
+        ))
+        ui_api_url = ui_api_lambda.add_function_url(
+            auth_type=lambda_.FunctionUrlAuthType.NONE,
+            cors=lambda_.FunctionUrlCorsOptions(
+                allowed_origins=["*"],
+                allowed_methods=[lambda_.HttpMethod.GET, lambda_.HttpMethod.POST],
+                allowed_headers=["authorization", "content-type"],
+                max_age=Duration.hours(1),
+            ),
+        )
+        ui_oai = cloudfront.OriginAccessIdentity(self, "RemediationUiOai")
+        pdf_processing_bucket.grant_read(ui_oai, "web/*")
+        ui_distribution = cloudfront.Distribution(
+            self, "RemediationUiCdn",
+            default_root_object="index.html",
+            default_behavior=cloudfront.BehaviorOptions(
+                origin=origins.S3Origin(
+                    pdf_processing_bucket,
+                    origin_access_identity=ui_oai,
+                    origin_path="/web",
+                ),
+                viewer_protocol_policy=cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+                allowed_methods=cloudfront.AllowedMethods.ALLOW_GET_HEAD,
+                cache_policy=cloudfront.CachePolicy.CACHING_DISABLED,
+            ),
+        )
+        s3deploy.BucketDeployment(
+            self, "RemediationUiWeb",
+            sources=[
+                s3deploy.Source.asset("ui"),
+                s3deploy.Source.data(
+                    "config.js",
+                    f'window.PDF_API_BASE = "{ui_api_url.url.rstrip("/")}";\n',
+                ),
+            ],
+            destination_bucket=pdf_processing_bucket,
+            destination_key_prefix="web",
+            distribution=ui_distribution,
+            distribution_paths=["/*"],
+        )
+        cdk.CfnOutput(self, "RemediationUiUrl", value=f"https://{ui_distribution.distribution_domain_name}")
+        cdk.CfnOutput(self, "RemediationUiApiUrl", value=ui_api_url.url)
         # Store log group names dynamically
         pdf_splitter_lambda_log_group_name = f"/aws/lambda/{pdf_splitter_lambda.function_name}"
         pdf_merger_lambda_log_group_name = f"/aws/lambda/{pdf_merger_lambda.function_name}"

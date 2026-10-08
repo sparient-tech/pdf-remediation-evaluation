@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PDF Remediation</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <section id="login-screen" class="login-wrap">
+    <form id="login-form" class="login-card">
+      <h1>PDF Remediation</h1>
+      <p class="hint">Sign in with your <strong>@sparient.com</strong> email and password.</p>
+      <label for="username">Username</label>
+      <input id="username" name="username" type="email" autocomplete="username" required placeholder="name@sparient.com">
+      <label for="password">Password</label>
+      <input id="password" name="password" type="password" autocomplete="current-password" required>
+      <div class="btn-row">
+        <button class="btn" type="submit">Sign in</button>
+      </div>
+      <p id="login-error" class="error hidden" role="alert"></p>
+    </form>
+  </section>
+
+  <section id="app-screen" class="app hidden">
+    <header class="topbar">
+      <h1>PDF Remediation</h1>
+      <button id="logout" class="btn secondary" type="button">Sign out</button>
+    </header>
+    <div class="layout">
+      <aside class="sidebar">
+        <h2>Uploaded files</h2>
+        <div id="file-list" class="file-list">
+          <p class="muted">No files yet.</p>
+        </div>
+      </aside>
+      <main class="main">
+        <h2>Upload</h2>
+        <div id="dropzone" class="dropzone">
+          <p>Drop PDFs here, or choose files. You can start another upload while one is remediating.</p>
+          <div class="btn-row" style="justify-content: center;">
+            <label class="btn" for="file-input">Choose PDFs</label>
+          </div>
+          <input id="file-input" type="file" accept="application/pdf,.pdf" multiple hidden>
+        </div>
+        <section id="detail" class="detail">
+          <p class="muted">Select a file on the left to see stats and downloads.</p>
+        </section>
+      </main>
+    </div>
+  </section>
+
+  <script src="config.js"></script>
+  <script type="module" src="app.js"></script>
+</body>
+</html>
