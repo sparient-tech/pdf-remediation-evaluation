@@ -126,7 +126,7 @@ def require_auth(headers):
         raise AuthError("Sign in required")
     token = auth.split(" ", 1)[1].strip()
     try:
-        user, exp, sig = token.split(".")
+        user, exp, sig = token.rsplit(".", 2)
         payload = f"{user}.{exp}"
         expect = hmac.new(token_secret().encode(), payload.encode(), hashlib.sha256).hexdigest()
         if not hmac.compare_digest(expect, sig) or int(exp) < time.time():
