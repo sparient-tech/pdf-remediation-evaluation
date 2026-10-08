@@ -20,7 +20,10 @@
       <label for="password">Password</label>
       <input id="password" class="field" name="password" type="password" autocomplete="current-password" required>
       <div class="btn-row">
-        <button class="btn" type="submit">Sign in</button>
+        <button class="btn" type="submit">
+          <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><path d="M10 17l5-5-5-5"/><path d="M15 12H3"/></svg>
+          Sign in
+        </button>
       </div>
       <p id="login-error" class="error hidden" role="alert"></p>
     </form>
@@ -32,7 +35,10 @@
         <img class="brand-logo" src="https://sparient.com/__l5e/assets-v1/1eb8d5c8-5fd8-4543-9472-9f22a8923ae1/sparient-horizontal.png" alt="Sparient">
         <h1>PDF Remediation</h1>
       </div>
-      <button id="logout" class="btn secondary" type="button">Sign out</button>
+      <button id="logout" class="btn secondary" type="button">
+        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5"/><path d="M21 12H9"/></svg>
+        Sign out
+      </button>
     </header>
     <div class="layout">
       <aside class="sidebar">
@@ -44,9 +50,13 @@
       <main class="main">
         <h2>Upload</h2>
         <div id="dropzone" class="dropzone">
+          <svg class="drop-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M5 21h14"/></svg>
           <p>Drop PDFs here, or choose files. You can start another upload while one is remediating.</p>
           <div class="btn-row" style="justify-content: center;">
-            <label class="btn" for="file-input">Choose PDFs</label>
+            <label class="btn" for="file-input">
+              <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg>
+              Choose PDFs
+            </label>
           </div>
           <input id="file-input" type="file" accept="application/pdf,.pdf" multiple hidden>
         </div>

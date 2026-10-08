@@ -1,5 +1,6 @@
 import { queueFile, startQueuedJob, subscribe } from "./mockPipeline.js";
 import {
+  apiDownloadUrl,
   apiList,
   apiLogin,
   apiStart,
@@ -26,6 +27,7 @@ const detailEl = document.getElementById("detail");
 let jobs = [];
 let selectedId = null;
 let pollTimer = null;
+let jsonView = { jobId: null, title: "", text: "", downloadKey: null, mockKey: null };
 
 function isAuthed() {
   return sessionStorage.getItem(SESSION_KEY) === "1";
@@ -166,6 +168,21 @@ async function downloadKey(key) {
   }
 }
 
+function icon(name) {
+  const paths = {
+    play: '<polygon points="6 4 20 12 6 20 6 4"/>',
+    download: '<path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M5 21h14"/>',
+    file: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/>',
+    fileCheck: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M9 15l2 2 4-4"/>',
+    report: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M8 13h8"/><path d="M8 17h5"/>',
+    stats: '<path d="M4 20V10"/><path d="M12 20V4"/><path d="M20 20v-7"/>',
+    code: '<path d="M8 8l-4 4 4 4"/><path d="M16 8l4 4-4 4"/>',
+    list: '<path d="M8 6h13"/><path d="M8 12h13"/><path d="M8 18h13"/><path d="M3 6h.01"/><path d="M3 12h.01"/><path d="M3 18h.01"/>',
+    pdf: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/>',
+  };
+  return `<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths[name] || ""}</svg>`;
+}
+
 function statusLabel(status) {
   const labels = {
     ready: "Ready",
@@ -185,8 +202,11 @@ function renderList() {
   }
   fileListEl.innerHTML = [...jobs].reverse().map((job) => `
     <button class="file-item ${job.id === selectedId ? "active" : ""}" data-id="${job.id}" type="button">
-      <span class="file-name">${escapeHtml(job.name)}</span>
-      <span class="chip ${job.status}">${escapeHtml(statusLabel(job.status))}</span>
+      ${icon("pdf")}
+      <span class="file-copy">
+        <span class="file-name">${escapeHtml(job.name)}</span>
+        <span class="chip ${job.status}">${escapeHtml(statusLabel(job.status))}</span>
+      </span>
     </button>
   `).join("");
   fileListEl.querySelectorAll(".file-item").forEach((btn) => {
@@ -234,9 +254,9 @@ function renderDetail() {
     <p class="status-line"><span class="chip ${job.status}">${escapeHtml(statusLabel(job.status))}</span></p>
     ${job.error ? `<p class="error">${escapeHtml(job.error)}</p>` : ""}
     <div class="btn-row">
-      <button class="btn" type="button" id="start-remediation" ${canStart ? "" : "disabled"}>Start remediating</button>
-      <button class="btn secondary" type="button" id="dl-original" ${originalReady ? "" : "disabled"}>Download original</button>
-      <button class="btn secondary" type="button" id="dl-remediated" ${remediatingReady ? "" : "disabled"}>Download remediated</button>
+      <button class="btn" type="button" id="start-remediation" ${canStart ? "" : "disabled"}>${icon("play")} Start remediating</button>
+      <button class="btn secondary" type="button" id="dl-original" ${originalReady ? "" : "disabled"}>${icon("file")} Download original</button>
+      <button class="btn secondary" type="button" id="dl-remediated" ${remediatingReady ? "" : "disabled"}>${icon("fileCheck")} Download remediated</button>
     </div>
     ${categories.length ? `
       <h2 style="margin-top:20px">Issues by category</h2>
@@ -256,10 +276,17 @@ function renderDetail() {
     ` : `<p class="muted" style="margin-top:16px">${canStart ? "Upload saved. Click Start remediating." : "Category results appear after the accessibility check."}</p>`}
     <h2 style="margin-top:20px">Reports</h2>
     <div class="btn-row">
-      <button class="btn secondary" type="button" id="dl-after-report" ${reportsReady && reports.afterReport ? "" : "disabled"}>Report after remediation</button>
-      <button class="btn secondary" type="button" id="dl-remediation-stats" ${reportsReady && reports.remediationStats ? "" : "disabled"}>Remediation stats</button>
-      <button class="btn secondary" type="button" id="dl-verapdf-report" ${reportsReady && reports.verapdfReport ? "" : "disabled"}>veraPDF report</button>
-      <button class="btn secondary" type="button" id="dl-verapdf-summary" ${reportsReady && reports.verapdfSummary ? "" : "disabled"}>veraPDF summary</button>
+      <button class="btn secondary" type="button" id="dl-after-report" ${reportsReady && reports.afterReport ? "" : "disabled"}>${icon("report")} Report after remediation</button>
+      <button class="btn secondary" type="button" id="dl-remediation-stats" ${reportsReady && reports.remediationStats ? "" : "disabled"}>${icon("stats")} Remediation stats</button>
+      <button class="btn secondary" type="button" id="dl-verapdf-report" ${reportsReady && reports.verapdfReport ? "" : "disabled"}>${icon("code")} veraPDF report</button>
+      <button class="btn secondary" type="button" id="dl-verapdf-summary" ${reportsReady && reports.verapdfSummary ? "" : "disabled"}>${icon("list")} veraPDF summary</button>
+    </div>
+    <div class="json-view-wrap ${jsonView.jobId === job.id && jsonView.text ? "" : "hidden"}" id="json-view-wrap">
+      <div class="json-view-head">
+        <strong id="json-view-title">${escapeHtml(jsonView.jobId === job.id ? jsonView.title : "")}</strong>
+        <button class="btn secondary" type="button" id="json-download">${icon("download")} Download</button>
+      </div>
+      <pre class="json-view" id="json-view">${escapeHtml(jsonView.jobId === job.id ? jsonView.text : "")}</pre>
     </div>
   `;
 
@@ -273,21 +300,42 @@ function renderDetail() {
     else downloadKey(job.resultKey);
   });
   document.getElementById("dl-after-report")?.addEventListener("click", () => {
-    if (isLive()) downloadKey(reports.afterReport);
-    else downloadMockReport(job, "afterReport");
+    openJsonReport(job, "Report after remediation", reports.afterReport, "afterReport");
   });
   document.getElementById("dl-remediation-stats")?.addEventListener("click", () => {
-    if (isLive()) downloadKey(reports.remediationStats);
-    else downloadMockReport(job, "remediationStats");
+    openJsonReport(job, "Remediation stats", reports.remediationStats, "remediationStats");
   });
   document.getElementById("dl-verapdf-report")?.addEventListener("click", () => {
-    if (isLive()) downloadKey(reports.verapdfReport);
-    else downloadMockReport(job, "verapdfReport");
+    openJsonReport(job, "veraPDF report", reports.verapdfReport, "verapdfReport");
   });
   document.getElementById("dl-verapdf-summary")?.addEventListener("click", () => {
-    if (isLive()) downloadKey(reports.verapdfSummary);
-    else downloadMockReport(job, "verapdfSummary");
+    openJsonReport(job, "veraPDF summary", reports.verapdfSummary, "verapdfSummary");
   });
+  document.getElementById("json-download")?.addEventListener("click", () => {
+    if (isLive() && jsonView.downloadKey) downloadKey(jsonView.downloadKey);
+    else downloadMockReport(job, jsonView.mockKey);
+  });
+}
+
+async function openJsonReport(job, title, liveKey, mockKey) {
+  jsonView = { jobId: job.id, title, text: "Loading...", downloadKey: liveKey, mockKey };
+  render();
+  try {
+    let data;
+    if (isLive()) {
+      const { url } = await apiDownloadUrl(liveKey);
+      const response = await fetch(url);
+      if (!response.ok) throw new Error("Could not load JSON");
+      data = await response.json();
+    } else {
+      data = job.stats?.reports?.[mockKey]?.body;
+      if (!data) throw new Error("JSON is not ready");
+    }
+    jsonView.text = JSON.stringify(data, null, 2);
+  } catch (err) {
+    jsonView.text = err.message || "Could not load JSON";
+  }
+  render();
 }
 
 function downloadMockReport(job, key) {
