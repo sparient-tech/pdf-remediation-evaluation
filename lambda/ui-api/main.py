@@ -26,12 +26,8 @@ PRESIGN_SECONDS = int(os.environ.get("PRESIGN_SECONDS", "300"))
 TOKEN_TTL = int(os.environ.get("TOKEN_TTL_SECONDS", str(12 * 3600)))
 
 _SECRET_CACHE = None
-
-CORS = {
-    "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Headers": "authorization,content-type",
-    "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
-}
+# CORS is set on the Function URL only. Do not also send Access-Control-Allow-Origin
+# here or the browser sees two values (*, CloudFront origin) and blocks login.
 
 
 def lambda_handler(event, context):
@@ -96,7 +92,6 @@ def respond(status, body):
     return {
         "statusCode": status,
         "headers": {
-            **CORS,
             "Content-Type": "application/json",
             "Cache-Control": "no-store",
         },
