@@ -166,6 +166,18 @@ async function downloadKey(key) {
   }
 }
 
+function statusLabel(status) {
+  const labels = {
+    ready: "Ready",
+    queued: "Queued",
+    running: "Running",
+    done: "Completed",
+    failed: "Failed",
+    missing: "Not found",
+  };
+  return labels[status] || status || "Ready";
+}
+
 function renderList() {
   if (!jobs.length) {
     fileListEl.innerHTML = '<p class="muted">No files yet.</p>';
@@ -174,8 +186,7 @@ function renderList() {
   fileListEl.innerHTML = [...jobs].reverse().map((job) => `
     <button class="file-item ${job.id === selectedId ? "active" : ""}" data-id="${job.id}" type="button">
       <span class="file-name">${escapeHtml(job.name)}</span>
-      <span class="chip ${job.status}">${escapeHtml(job.step)}</span>
-      <div class="mini-bar" aria-hidden="true"><span style="width:${job.percent}%"></span></div>
+      <span class="chip ${job.status}">${escapeHtml(statusLabel(job.status))}</span>
     </button>
   `).join("");
   fileListEl.querySelectorAll(".file-item").forEach((btn) => {
@@ -220,16 +231,12 @@ function renderDetail() {
 
   detailEl.innerHTML = `
     <h2>${escapeHtml(job.name)}</h2>
-    <div class="progress-label">
-      <span>${escapeHtml(job.step)}</span>
-      <span>${job.percent}%</span>
-    </div>
-    <div class="mini-bar" style="height:10px"><span style="width:${job.percent}%"></span></div>
+    <p class="status-line"><span class="chip ${job.status}">${escapeHtml(statusLabel(job.status))}</span></p>
     ${job.error ? `<p class="error">${escapeHtml(job.error)}</p>` : ""}
     <div class="btn-row">
       <button class="btn" type="button" id="start-remediation" ${canStart ? "" : "disabled"}>Start remediating</button>
       <button class="btn secondary" type="button" id="dl-original" ${originalReady ? "" : "disabled"}>Download original</button>
-      <button class="btn secondary" type="button" id="dl-remediated" ${remediatingReady ? "" : "disabled"}>Download remediating</button>
+      <button class="btn secondary" type="button" id="dl-remediated" ${remediatingReady ? "" : "disabled"}>Download remediated</button>
     </div>
     ${categories.length ? `
       <h2 style="margin-top:20px">Issues by category</h2>
@@ -247,11 +254,10 @@ function renderDetail() {
         </div>
       </div>
     ` : `<p class="muted" style="margin-top:16px">${canStart ? "Upload saved. Click Start remediating." : "Category results appear after the accessibility check."}</p>`}
-    <h2 style="margin-top:20px">S3 JSON reports</h2>
-    <p class="muted">Fetched from temp/.../accessability-report/ after the job finishes.</p>
+    <h2 style="margin-top:20px">Reports</h2>
     <div class="btn-row">
-      <button class="btn secondary" type="button" id="dl-after-report" ${reportsReady && reports.afterReport ? "" : "disabled"}>Report after remediating</button>
-      <button class="btn secondary" type="button" id="dl-remediation-stats" ${reportsReady && reports.remediationStats ? "" : "disabled"}>Remediating stats</button>
+      <button class="btn secondary" type="button" id="dl-after-report" ${reportsReady && reports.afterReport ? "" : "disabled"}>Report after remediation</button>
+      <button class="btn secondary" type="button" id="dl-remediation-stats" ${reportsReady && reports.remediationStats ? "" : "disabled"}>Remediation stats</button>
       <button class="btn secondary" type="button" id="dl-verapdf-report" ${reportsReady && reports.verapdfReport ? "" : "disabled"}>veraPDF report</button>
       <button class="btn secondary" type="button" id="dl-verapdf-summary" ${reportsReady && reports.verapdfSummary ? "" : "disabled"}>veraPDF summary</button>
     </div>

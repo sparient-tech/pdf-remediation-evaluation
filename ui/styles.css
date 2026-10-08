@@ -1,16 +1,17 @@
 :root {
-  --bg: #f4f1ea;
-  --panel: #fffdf8;
-  --ink: #1c1916;
-  --muted: #5c564e;
-  --line: #d9d2c5;
-  --accent: #1f4d3a;
-  --accent-2: #c45c26;
-  --ok: #1f4d3a;
-  --warn: #8a5a12;
-  --err: #8b2e2e;
-  --run: #1d4e89;
-  --shadow: 0 10px 30px rgba(28, 25, 22, 0.08);
+  --bg: #07131c;
+  --panel: #0f2430;
+  --card: #ffffff;
+  --ink: #0b1c24;
+  --muted: #5b6e78;
+  --line: #d7e1e6;
+  --accent: #12b5c0;
+  --accent-dark: #0a8f98;
+  --ok: #0f7a63;
+  --warn: #b58112;
+  --err: #c0392b;
+  --run: #0d6e9a;
+  --shadow: 0 18px 40px rgba(7, 19, 28, 0.28);
 }
 
 * { box-sizing: border-box; }
@@ -18,8 +19,8 @@
 html, body {
   margin: 0;
   min-height: 100%;
-  font-family: "Segoe UI", "Helvetica Neue", sans-serif;
-  color: var(--ink);
+  font-family: Inter, "Segoe UI", sans-serif;
+  color: #e8f2f4;
   background: var(--bg);
 }
 
@@ -35,20 +36,33 @@ button, input {
   display: grid;
   place-items: center;
   padding: 24px;
+  background:
+    radial-gradient(ellipse at top, rgba(18, 181, 192, 0.22), transparent 55%),
+    var(--bg);
 }
 
 .login-card {
   width: min(420px, 100%);
-  background: var(--panel);
+  background: var(--card);
+  color: var(--ink);
   border: 1px solid var(--line);
   border-radius: 16px;
   padding: 32px;
   box-shadow: var(--shadow);
 }
 
+.brand-logo {
+  display: block;
+  height: 36px;
+  width: auto;
+  margin: 0 0 14px;
+  object-fit: contain;
+}
+
 .login-card h1 {
   margin: 0 0 8px;
   font-size: 1.6rem;
+  color: var(--ink);
 }
 
 .hint, .muted {
@@ -56,18 +70,33 @@ button, input {
   font-size: 0.92rem;
 }
 
+.login-card .hint {
+  margin: 0 0 18px;
+}
+
 label {
   display: block;
   margin: 14px 0 6px;
   font-weight: 600;
+  color: var(--ink);
 }
 
-input[type="text"], input[type="password"] {
+.field {
+  display: block;
   width: 100%;
+  height: 44px;
   padding: 10px 12px;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: #fff;
+  color: var(--ink);
+  appearance: none;
+  -webkit-appearance: none;
+}
+
+.field:focus {
+  outline: 2px solid var(--accent);
+  border-color: var(--accent);
 }
 
 .btn {
@@ -81,6 +110,7 @@ input[type="text"], input[type="password"] {
   cursor: pointer;
   background: var(--accent);
   color: #fff;
+  font-weight: 600;
 }
 
 .btn:disabled {
@@ -89,6 +119,17 @@ input[type="text"], input[type="password"] {
 }
 
 .btn.secondary {
+  background: transparent;
+  color: #e8f2f4;
+  border: 1px solid rgba(232, 242, 244, 0.28);
+}
+
+.login-card .btn {
+  width: 100%;
+  height: 44px;
+}
+
+.detail .btn.secondary {
   background: #fff;
   color: var(--ink);
   border: 1px solid var(--line);
@@ -118,13 +159,25 @@ input[type="text"], input[type="password"] {
   justify-content: space-between;
   align-items: center;
   padding: 14px 20px;
-  background: var(--panel);
-  border-bottom: 1px solid var(--line);
+  background: #0b1c24;
+  border-bottom: 1px solid rgba(18, 181, 192, 0.25);
+}
+
+.brand-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.topbar .brand-logo {
+  height: 32px;
+  margin: 0;
 }
 
 .topbar h1 {
   margin: 0;
-  font-size: 1.15rem;
+  font-size: 1.05rem;
+  font-weight: 500;
 }
 
 .layout {
@@ -134,8 +187,8 @@ input[type="text"], input[type="password"] {
 }
 
 .sidebar {
-  border-right: 1px solid var(--line);
-  background: #faf7f1;
+  border-right: 1px solid rgba(18, 181, 192, 0.18);
+  background: #0b1c24;
   padding: 16px;
   overflow: auto;
 }
@@ -154,8 +207,9 @@ input[type="text"], input[type="password"] {
 .file-item {
   width: 100%;
   text-align: left;
-  border: 1px solid var(--line);
+  border: 1px solid rgba(18, 181, 192, 0.2);
   background: var(--panel);
+  color: #e8f2f4;
   border-radius: 10px;
   padding: 10px;
   cursor: pointer;
@@ -188,7 +242,7 @@ input[type="text"], input[type="password"] {
 .mini-bar {
   margin-top: 8px;
   height: 6px;
-  background: #e8e2d6;
+  background: rgba(232, 242, 244, 0.16);
   border-radius: 99px;
   overflow: hidden;
 }
@@ -202,10 +256,12 @@ input[type="text"], input[type="password"] {
 .main {
   padding: 20px;
   overflow: auto;
+  background: #0a1a22;
+  color: #e8f2f4;
 }
 
 .dropzone {
-  border: 2px dashed var(--line);
+  border: 2px dashed rgba(18, 181, 192, 0.45);
   border-radius: 14px;
   padding: 28px;
   text-align: center;
@@ -214,15 +270,24 @@ input[type="text"], input[type="password"] {
 
 .dropzone.drag {
   border-color: var(--accent);
-  background: #f3f8f5;
+  background: #12323c;
 }
 
 .detail {
   margin-top: 20px;
-  background: var(--panel);
+  background: var(--card);
+  color: var(--ink);
   border: 1px solid var(--line);
   border-radius: 14px;
   padding: 18px;
+}
+
+.detail .muted {
+  color: var(--muted);
+}
+
+.detail .chip {
+  margin-top: 0;
 }
 
 .stats-grid {
@@ -261,6 +326,10 @@ input[type="text"], input[type="password"] {
   margin-bottom: 6px;
 }
 
+.status-line {
+  margin: 0 0 12px;
+}
+
 .category-list {
   margin-top: 12px;
   border: 1px solid var(--line);
@@ -282,7 +351,7 @@ input[type="text"], input[type="password"] {
 }
 
 .category-row.total {
-  background: #f3f0e8;
+  background: #eef6f7;
 }
 
 .category-name {

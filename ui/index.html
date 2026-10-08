@@ -3,18 +3,22 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>PDF Remediation</title>
+  <title>PDF Remediation | Sparient</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
   <section id="login-screen" class="login-wrap">
     <form id="login-form" class="login-card">
+      <img class="brand-logo" src="https://sparient.com/__l5e/assets-v1/1eb8d5c8-5fd8-4543-9472-9f22a8923ae1/sparient-horizontal.png" alt="Sparient">
       <h1>PDF Remediation</h1>
-      <p class="hint">Sign in with your <strong>@sparient.com</strong> email and password.</p>
-      <label for="username">Username</label>
-      <input id="username" name="username" type="email" autocomplete="username" required placeholder="name@sparient.com">
+      <p class="hint">Sign in with your sparient id</p>
+      <label for="username">Sparient ID</label>
+      <input id="username" class="field" name="username" type="text" autocomplete="username" required>
       <label for="password">Password</label>
-      <input id="password" name="password" type="password" autocomplete="current-password" required>
+      <input id="password" class="field" name="password" type="password" autocomplete="current-password" required>
       <div class="btn-row">
         <button class="btn" type="submit">Sign in</button>
       </div>
@@ -24,7 +28,10 @@
 
   <section id="app-screen" class="app hidden">
     <header class="topbar">
-      <h1>PDF Remediation</h1>
+      <div class="brand-row">
+        <img class="brand-logo" src="https://sparient.com/__l5e/assets-v1/1eb8d5c8-5fd8-4543-9472-9f22a8923ae1/sparient-horizontal.png" alt="Sparient">
+        <h1>PDF Remediation</h1>
+      </div>
       <button id="logout" class="btn secondary" type="button">Sign out</button>
     </header>
     <div class="layout">

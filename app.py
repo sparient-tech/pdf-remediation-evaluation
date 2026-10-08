@@ -478,10 +478,21 @@ class PDFAccessibility(Stack):
             auth_type=lambda_.FunctionUrlAuthType.NONE,
             cors=lambda_.FunctionUrlCorsOptions(
                 allowed_origins=["*"],
-                allowed_methods=[lambda_.HttpMethod.GET, lambda_.HttpMethod.POST],
-                allowed_headers=["authorization", "content-type"],
+                allowed_methods=[lambda_.HttpMethod.ALL],
+                allowed_headers=["*"],
                 max_age=Duration.hours(1),
             ),
+        )
+        ui_api_lambda.add_permission(
+            "PublicUiApiFunctionUrl",
+            principal=iam.AnyPrincipal(),
+            action="lambda:InvokeFunctionUrl",
+            function_url_auth_type=lambda_.FunctionUrlAuthType.NONE,
+        )
+        ui_api_lambda.add_permission(
+            "PublicUiApiInvoke",
+            principal=iam.AnyPrincipal(),
+            action="lambda:InvokeFunction",
         )
         ui_oai = cloudfront.OriginAccessIdentity(self, "RemediationUiOai")
         pdf_processing_bucket.grant_read(ui_oai, "web/*")
