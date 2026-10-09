@@ -200,7 +200,7 @@ function renderList() {
     fileListEl.innerHTML = '<p class="muted">No files yet.</p>';
     return;
   }
-  fileListEl.innerHTML = [...jobs].reverse().map((job) => `
+  fileListEl.innerHTML = jobs.map((job) => `
     <button class="file-item ${job.id === selectedId ? "active" : ""}" data-id="${job.id}" type="button">
       ${icon("pdf")}
       <span class="file-copy">
@@ -379,7 +379,7 @@ function startPolling() {
 
 subscribe((next) => {
   if (isLive()) return;
-  jobs = next;
+  jobs = [...next].reverse();
   if (selectedId && !jobs.some((job) => job.id === selectedId)) {
     selectedId = jobs[0]?.id || null;
   }

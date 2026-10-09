@@ -11,6 +11,7 @@ import json
 import os
 import time
 import urllib.parse
+from datetime import datetime, timezone
 
 import boto3
 from botocore.config import Config
@@ -195,6 +196,22 @@ def list_prefix(prefix):
     return keys
 
 
+def list_objects(prefix):
+    items = []
+    token = None
+    while True:
+        kwargs = {"Bucket": BUCKET, "Prefix": prefix}
+        if token:
+            kwargs["ContinuationToken"] = token
+        resp = s3.list_objects_v2(**kwargs)
+        for item in resp.get("Contents") or []:
+            items.append((item["Key"], item.get("LastModified")))
+        if not resp.get("IsTruncated"):
+            break
+        token = resp.get("NextContinuationToken")
+    return items
+
+
 def allowed_download_key(key):
     key = urllib.parse.unquote(key or "").lstrip("/")
     if ".." in key or key.startswith("/") or "//" in key:
@@ -261,31 +278,40 @@ def download_url(key):
 
 
 def discovered_pdf_names():
-    names = set()
-    for key in list_prefix("uploads/"):
+    latest = {}
+
+    def remember(name, when):
+        prev = latest.get(name)
+        if name not in latest:
+            latest[name] = when
+        elif when and (prev is None or when > prev):
+            latest[name] = when
+
+    for key, when in list_objects("uploads/"):
         if key.lower().endswith(".pdf") and key.count("/") == 1:
-            names.add(os.path.basename(key))
-    for key in list_prefix("pdf/"):
+            remember(os.path.basename(key), when)
+    for key, when in list_objects("pdf/"):
         if key.lower().endswith(".pdf") and key.count("/") == 1:
-            names.add(os.path.basename(key))
-    for key in list_prefix("result/"):
+            remember(os.path.basename(key), when)
+    for key, when in list_objects("result/"):
         base = os.path.basename(key)
         if base.lower().endswith(".pdf") and base.upper().startswith("COMPLIANT_"):
-            names.add(base[len("COMPLIANT_"):])
-    seen_folders = set()
-    for key in list_prefix("temp/"):
+            remember(base[len("COMPLIANT_"):], when)
+    for key, when in list_objects("temp/"):
         parts = key.split("/")
         if len(parts) < 2 or parts[0] != "temp" or not parts[1]:
             continue
         folder = parts[1]
-        if folder in seen_folders:
-            continue
-        seen_folders.add(folder)
-        if folder.lower().endswith(".pdf"):
-            names.add(folder)
-        else:
-            names.add(f"{folder}.pdf")
-    return sorted(names)
+        name = folder if folder.lower().endswith(".pdf") else f"{folder}.pdf"
+        remember(name, when)
+    return [
+        name
+        for name, _when in sorted(
+            latest.items(),
+            key=lambda item: item[1] or datetime.min.replace(tzinfo=timezone.utc),
+            reverse=True,
+        )
+    ]
 
 
 def list_files():
