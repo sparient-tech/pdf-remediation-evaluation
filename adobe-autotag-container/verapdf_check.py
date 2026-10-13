@@ -58,12 +58,21 @@ FIELDS_EXPLAINED = {
     "has_structure_tree": "PDF catalog has StructTreeRoot (already tagged at all).",
     "call_adobe_autotag": "true = this container must call Adobe Autotag.",
     "decision_reason": "Why Autotag is called or skipped.",
+    "page_count": "Number of PDF pages. Adobe Autotag bills 10 document transactions per page.",
     "error": "Set only when veraPDF itself failed to run.",
 }
 
 
 def _local_tag(tag: str) -> str:
     return tag.split("}", 1)[-1] if "}" in tag else tag
+
+
+def pdf_page_count(pdf_path: str) -> int:
+    doc = pymupdf.open(pdf_path)
+    try:
+        return int(doc.page_count or 0)
+    finally:
+        doc.close()
 
 
 def has_structure_tree(pdf_path: str) -> bool:
@@ -210,12 +219,18 @@ def run_verapdf(pdf_path: str, flavour: str = FLAVOUR, timeout: int = DEFAULT_TI
     Validate pdf_path with veraPDF and return a decision plus report fields.
     """
     tagged = has_structure_tree(pdf_path)
+    try:
+        pages = pdf_page_count(pdf_path)
+    except Exception as exc:
+        logger.warning("Could not read page count from %s: %s", pdf_path, exc)
+        pages = 0
     binary = os.environ.get("VERAPDF_BIN") or shutil.which("verapdf") or "/opt/verapdf/verapdf"
     summary = {
         "tool": "veraPDF",
         "flavour": flavour,
         "source_pdf": os.path.basename(pdf_path),
         "has_structure_tree": tagged,
+        "page_count": pages,
         "fields_explained": FIELDS_EXPLAINED,
     }
 

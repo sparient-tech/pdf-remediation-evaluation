@@ -9,6 +9,7 @@ import hashlib
 import hmac
 import json
 import os
+import re
 import time
 import urllib.parse
 from datetime import datetime, timezone
@@ -25,6 +26,7 @@ DEMO_USER = os.environ.get("DEMO_USER", "amol.ganjare@sparient.com")
 DEMO_PASS = os.environ.get("DEMO_PASS", "sparient123")
 PRESIGN_SECONDS = int(os.environ.get("PRESIGN_SECONDS", "300"))
 TOKEN_TTL = int(os.environ.get("TOKEN_TTL_SECONDS", str(12 * 3600)))
+ADOBE_AUTOTAG_TX_PER_PAGE = 10
 
 _SECRET_CACHE = None
 # CORS is set on the Function URL only. Do not also send Access-Control-Allow-Origin
@@ -349,6 +351,108 @@ def report_keys(name):
     return found
 
 
+def s3_json(key):
+    if not key:
+        return None
+    try:
+        body = s3.get_object(Bucket=BUCKET, Key=key)["Body"].read()
+        return json.loads(body)
+    except Exception:
+        return None
+
+
+def as_count(value, default=0):
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return 1 if value else 0
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def page_count_from_bytes(data):
+    if not data:
+        return 0
+    counts = []
+    for match in re.finditer(rb"/Type\s*/Pages\b", data):
+        window = data[max(0, match.start() - 400): match.start() + 800]
+        found = re.search(rb"/Count\s+(\d+)", window)
+        if found:
+            counts.append(int(found.group(1)))
+    if counts:
+        return max(counts)
+    return len(re.findall(rb"/Type\s*/Page(?:\s|/|>>)", data))
+
+
+def s3_pdf_page_count(key):
+    if not key:
+        return 0
+    try:
+        head = s3.get_object(Bucket=BUCKET, Key=key, Range="bytes=0-1048575")["Body"].read()
+        pages = page_count_from_bytes(head)
+        if pages:
+            return pages
+        size = s3.head_object(Bucket=BUCKET, Key=key).get("ContentLength") or 0
+        if size > 1048576:
+            start = max(0, size - 1048576)
+            tail = s3.get_object(Bucket=BUCKET, Key=key, Range=f"bytes={start}-{size - 1}")["Body"].read()
+            return page_count_from_bytes(tail)
+    except Exception:
+        return 0
+    return 0
+
+
+def adobe_transactions(pages, ran_autotag, ran_checker):
+    pages = max(0, as_count(pages))
+    autotag_tx = pages * ADOBE_AUTOTAG_TX_PER_PAGE if ran_autotag and pages else 0
+    checker_tx = 1 if ran_checker else 0
+    return autotag_tx, checker_tx, autotag_tx + checker_tx
+
+
+def adobe_usage(reports, temp_keys, pdf_key=None):
+    stats = s3_json(reports.get("remediationStats")) or {}
+    vera = s3_json(reports.get("verapdfSummary")) or {}
+    ran_autotag_file = any(
+        "/output_autotag/" in key and key.lower().endswith(".xlsx")
+        for key in temp_keys
+    )
+    if "call_adobe_autotag" in vera:
+        ran_autotag = bool(vera.get("call_adobe_autotag"))
+        skipped = 0 if ran_autotag else 1
+    elif ran_autotag_file:
+        ran_autotag, skipped = True, 0
+    elif "adobe_autotag" in stats:
+        ran_autotag = bool(as_count(stats.get("adobe_autotag")))
+        skipped = as_count(stats.get("adobe_autotag_skipped"), 0 if ran_autotag else 0)
+    else:
+        ran_autotag, skipped = False, 0
+
+    pages = (
+        as_count(vera.get("page_count"))
+        or as_count(stats.get("page_count"))
+        or s3_pdf_page_count(pdf_key)
+    )
+    if pages and skipped:
+        autotag_tx, checker_tx, total = adobe_transactions(pages, False, True)
+    elif pages:
+        autotag_tx, checker_tx, total = adobe_transactions(pages, True, True)
+    else:
+        autotag_tx, checker_tx, total = 0, 0, 0
+    return {
+        "transactions": total,
+        "pages": pages,
+        "autotag": autotag_tx,
+        "autotag_jobs": 1 if ran_autotag else 0,
+        "autotag_skipped": skipped,
+        "checker": checker_tx,
+        "extract": 0,
+        "precheck": 0,
+        "reason": vera.get("decision_reason") or stats.get("decision_reason") or "",
+    }
+
+
 def categories_from_s3(key):
     if not key:
         return []
@@ -420,4 +524,5 @@ def describe_file(name):
         "result_key": result_key if has_result else None,
         "reports": reports,
         "categories": categories,
+        "adobe": adobe_usage(reports, temp_keys, original_key or (result_key if has_result else None)),
     }

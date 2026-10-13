@@ -117,7 +117,13 @@ function buildReports(filename, skipAutotag, categories, veraPDF, remediation) {
         adobe_precheck: 0,
         adobe_extract: 0,
         adobe_autotag: remediation.adobe_autotag,
+        adobe_autotag_skipped: remediation.adobe_autotag_skipped,
         adobe_jobs_per_pdf: skipAutotag ? 1 : 2,
+        page_count: veraPDF.page_count,
+        adobe_autotag_transactions: skipAutotag ? 0 : (veraPDF.page_count || 0) * 10,
+        adobe_checker_transactions: 1,
+        adobe_transactions: (skipAutotag ? 0 : (veraPDF.page_count || 0) * 10) + 1,
+        decision_reason: veraPDF.decision_reason,
         report_s3: `temp/${source}/accessability-report/${compliant}_accessibility_report_after_remidiation.json`,
         passed: remediation.passed,
         failed: remediation.failed,
@@ -164,10 +170,19 @@ function buildReports(filename, skipAutotag, categories, veraPDF, remediation) {
   };
 }
 
+function mockPageCount(filename) {
+  const match = String(filename || "").match(/(\d+)\s*-?p(?:age)?s?\b/i);
+  if (match) return Math.max(1, Number(match[1]));
+  return 1;
+}
+
 function buildStats(filename, skipAutotag) {
   const failedRules = skipAutotag ? 4 : 5;
   const categories = buildCategories(skipAutotag);
   const totals = sumCategoryCounts(categories);
+  const pages = mockPageCount(filename);
+  const autotagTx = skipAutotag ? 0 : pages * 10;
+  const checkerTx = 1;
   const veraPDF = {
     is_compliant: false,
     has_structure_tree: skipAutotag,
@@ -175,6 +190,7 @@ function buildStats(filename, skipAutotag) {
     tagging_failures: skipAutotag ? 0 : 1,
     other_failures: 4,
     call_adobe_autotag: !skipAutotag,
+    page_count: pages,
     decision_reason: skipAutotag
       ? "Already tagged; remaining veraPDF failures are not Autotag work (alt text, title, language, contrast, etc.)"
       : "No PDF structure tree (StructTreeRoot); Adobe Autotag is required",
@@ -193,6 +209,17 @@ function buildStats(filename, skipAutotag) {
     veraPDF,
     remediation,
     categories,
+    adobe: {
+      transactions: autotagTx + checkerTx,
+      pages,
+      autotag: autotagTx,
+      autotag_jobs: skipAutotag ? 0 : 1,
+      autotag_skipped: remediation.adobe_autotag_skipped,
+      checker: checkerTx,
+      extract: 0,
+      precheck: 0,
+      reason: veraPDF.decision_reason,
+    },
     reports: buildReports(filename, skipAutotag, categories, veraPDF, remediation),
   };
 }

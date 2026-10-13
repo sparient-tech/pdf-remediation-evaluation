@@ -203,6 +203,7 @@ label {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 16px;
   padding: 14px 20px;
   background: #0b1c24;
   border-bottom: 1px solid rgba(18, 181, 192, 0.25);
@@ -315,6 +316,13 @@ label {
 .chip.queued, .chip.running, .chip.ready { background: #d7e6f6; color: var(--run); }
 .chip.done { background: #d9ebe3; color: var(--ok); }
 .chip.failed { background: #f3d6d6; color: var(--err); }
+
+.file-meta {
+  display: block;
+  margin-top: 4px;
+  color: #9cb4bd;
+  font-size: 0.75rem;
+}
 
 .mini-bar {
   margin-top: 8px;

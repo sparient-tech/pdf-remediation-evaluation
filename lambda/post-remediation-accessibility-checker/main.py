@@ -1,4 +1,6 @@
 import os
+import math
+import re
 import boto3
 import json
 from adobe.pdfservices.operation.auth.service_principal_credentials import ServicePrincipalCredentials
@@ -13,6 +15,8 @@ from botocore.exceptions import ClientError
 import re
 
 CLOUDWATCH_NAMESPACE = "PDFAccessibility"
+ADOBE_AUTOTAG_TX_PER_PAGE = 10
+ADOBE_CHECKER_PAGES_PER_TX = 50
 
 
 def _as_int(value):
@@ -82,6 +86,61 @@ def emit_stats(filename, **counts):
             cw.put_metric_data(Namespace=CLOUDWATCH_NAMESPACE, MetricData=metric_data)
     except Exception as e:
         print(f"Filename : {filename} | CloudWatch stats emit failed: {e}")
+
+
+def page_count_from_bytes(data):
+    if not data:
+        return 0
+    counts = []
+    for match in re.finditer(rb"/Type\s*/Pages\b", data):
+        window = data[max(0, match.start() - 400): match.start() + 800]
+        found = re.search(rb"/Count\s+(\d+)", window)
+        if found:
+            counts.append(int(found.group(1)))
+    if counts:
+        return max(counts)
+    return len(re.findall(rb"/Type\s*/Page(?:\s|/|>>)", data))
+
+
+def pdf_page_count(path):
+    try:
+        with open(path, "rb") as handle:
+            data = handle.read()
+        return page_count_from_bytes(data)
+    except Exception:
+        return 0
+
+
+def load_verapdf_autotag(bucket_name, file_basename):
+    original = os.path.splitext(file_basename)[0]
+    if original.upper().startswith("COMPLIANT_"):
+        original = original[len("COMPLIANT_"):]
+    prefix = f"temp/{original}/accessability-report/"
+    s3 = boto3.client("s3")
+    try:
+        resp = s3.list_objects_v2(Bucket=bucket_name, Prefix=prefix)
+    except Exception as err:
+        print(f"Filename : {file_basename} | Could not list veraPDF summary: {err}")
+        return 1, 0, "", 0
+    key = None
+    for item in resp.get("Contents") or []:
+        if str(item.get("Key") or "").lower().endswith("_verapdf_summary.json"):
+            key = item["Key"]
+            break
+    if not key:
+        return 1, 0, "", 0
+    try:
+        doc = json.loads(s3.get_object(Bucket=bucket_name, Key=key)["Body"].read())
+        called = bool(doc.get("call_adobe_autotag"))
+        return (
+            (1 if called else 0),
+            (0 if called else 1),
+            doc.get("decision_reason") or "",
+            int(doc.get("page_count") or 0),
+        )
+    except Exception as err:
+        print(f"Filename : {file_basename} | Could not read veraPDF summary: {err}")
+        return 1, 0, "", 0
 
 
 def save_stats_to_s3(bucket_name, file_key, stats):
@@ -231,14 +290,26 @@ def lambda_handler(event, context):
         except Exception as parse_error:
             print(f"Filename : {file_basename} | Could not parse checker JSON for stats: {parse_error}")
 
+        adobe_autotag, adobe_autotag_skipped, decision_reason, vera_pages = load_verapdf_autotag(
+            s3_bucket, file_basename
+        )
+        pages = vera_pages or pdf_page_count(local_path)
+        autotag_tx = pages * ADOBE_AUTOTAG_TX_PER_PAGE if adobe_autotag and pages else 0
+        checker_tx = max(1, math.ceil(pages / ADOBE_CHECKER_PAGES_PER_TX)) if pages else 1
         stats = {
             "filename": file_basename,
+            "page_count": pages,
             "adobe_calls_this_step": 1,
             "adobe_postcheck": 1,
             "adobe_precheck": 0,
             "adobe_extract": 0,
-            "adobe_autotag": 1,
-            "adobe_jobs_per_pdf": 2,
+            "adobe_autotag": adobe_autotag,
+            "adobe_autotag_skipped": adobe_autotag_skipped,
+            "adobe_jobs_per_pdf": adobe_autotag + 1,
+            "adobe_autotag_transactions": autotag_tx,
+            "adobe_checker_transactions": checker_tx,
+            "adobe_transactions": autotag_tx + checker_tx,
+            "decision_reason": decision_reason,
             "report_s3": bucket_save_path,
             **counts,
         }

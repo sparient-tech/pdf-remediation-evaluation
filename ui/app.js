@@ -74,11 +74,24 @@ function liveJobFromStatus(item) {
     status: item.status,
     percent: item.percent,
     step: item.step,
-    stats: { categories: item.categories || [], reports: item.reports || {} },
+    stats: { categories: item.categories || [], reports: item.reports || {}, adobe: item.adobe || null },
+    adobe: item.adobe || null,
     originalKey: item.original_key,
     resultKey: item.result_key,
     error: item.error || null,
   };
+}
+
+function adobeFromJob(job) {
+  if (job?.adobe) return job.adobe;
+  return job?.stats?.adobe || null;
+}
+
+function adobeLine(adobe) {
+  if (!adobe?.pages) return "";
+  if (adobe.autotag_skipped) return `${adobe.pages}×10 skipped + 1 = ${adobe.transactions}`;
+  if (!adobe.transactions) return "";
+  return `${adobe.pages}×10 + 1 = ${adobe.transactions}`;
 }
 
 async function refreshLiveList() {
@@ -206,6 +219,7 @@ function renderList() {
       <span class="file-copy">
         <span class="file-name">${escapeHtml(job.name)}</span>
         <span class="chip ${job.status}">${escapeHtml(statusLabel(job.status))}</span>
+        ${adobeLine(adobeFromJob(job)) ? `<span class="file-meta">${escapeHtml(adobeLine(adobeFromJob(job)))}</span>` : ""}
       </span>
     </button>
   `).join("");
@@ -248,6 +262,8 @@ function renderDetail() {
   );
   const originalReady = Boolean(job.originalBlob || job.originalKey);
   const remediatingReady = job.status === "done" && Boolean(job.originalBlob || job.resultKey);
+  const adobe = adobeFromJob(job);
+  const showAdobe = Boolean(adobe?.pages);
 
   detailEl.innerHTML = `
     <h2>${escapeHtml(job.name)}</h2>
@@ -258,6 +274,12 @@ function renderDetail() {
       <button class="btn secondary" type="button" id="dl-original" ${originalReady ? "" : "disabled"}>${icon("file")} Download original</button>
       <button class="btn secondary" type="button" id="dl-remediated" ${remediatingReady ? "" : "disabled"}>${icon("fileCheck")} Download remediated</button>
     </div>
+    ${showAdobe ? `
+      <h2 style="margin-top:20px">Adobe usage</h2>
+      <p class="muted">${adobe.autotag_skipped
+        ? `${adobe.pages} pages × 10 skipped + 1 checker = ${adobe.transactions}`
+        : `${adobe.pages} pages × 10 + 1 checker = ${adobe.transactions}`}</p>
+    ` : ""}
     ${categories.length ? `
       <h2 style="margin-top:20px">Issues by category</h2>
       <p class="muted">From the most recent Adobe accessibility check for this file.</p>
